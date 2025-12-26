@@ -23,6 +23,34 @@
   gap: 20px;
   min-height: 100vh;
   box-sizing: border-box;
+  position: relative;
+}
+
+.theme-toggle {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: #0f0f0f;
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: border-color 0.25s, background-color 0.25s;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  outline: none;
+}
+
+.theme-toggle:hover {
+  border-color: #396cd8;
+}
+
+.theme-toggle:active {
+  border-color: #396cd8;
+  background-color: #e8e8e8;
 }
 
 .record-btn {
@@ -97,32 +125,40 @@
   background-color: #e8e8e8;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #f6f6f6;
-    background-color: #2f2f2f;
-  }
+/* Light theme (default, but explicit for data-theme="light") */
+[data-theme="light"] {
+  color: #0f0f0f;
+  background-color: #f6f6f6;
+}
 
-  .record-btn,
-  .copy-btn {
-    color: #ffffff;
-    background-color: #0f0f0f98;
-    border-color: transparent;
-  }
+/* Dark theme */
+[data-theme="dark"] {
+  color: #f6f6f6;
+  background-color: #2f2f2f;
+}
 
-  .record-btn:active,
-  .copy-btn:active {
-    background-color: #0f0f0f69;
-  }
+[data-theme="dark"] .theme-toggle,
+[data-theme="dark"] .record-btn,
+[data-theme="dark"] .copy-btn {
+  color: #ffffff;
+  background-color: #0f0f0f98;
+  border-color: transparent;
+}
 
-  .record-btn:hover,
-  .copy-btn:hover {
-    border-color: #24c8db;
-  }
+[data-theme="dark"] .theme-toggle:active,
+[data-theme="dark"] .record-btn:active,
+[data-theme="dark"] .copy-btn:active {
+  background-color: #0f0f0f69;
+}
 
-  .text-box {
-    color: #f6f6f6;
-    background-color: #1a1a1a;
-    border-color: #444;
-  }
+[data-theme="dark"] .theme-toggle:hover,
+[data-theme="dark"] .record-btn:hover,
+[data-theme="dark"] .copy-btn:hover {
+  border-color: #24c8db;
+}
+
+[data-theme="dark"] .text-box {
+  color: #f6f6f6;
+  background-color: #1a1a1a;
+  border-color: #444;
 }
