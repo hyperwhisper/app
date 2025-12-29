@@ -48,23 +48,27 @@ function App() {
   // Theme handling
   useEffect(() => {
     const root = document.documentElement;
-    const applyTheme = () => {
+    let intervalId: number | undefined;
+
+    const applyTheme = async () => {
       if (theme === "system") {
-        const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
-          ? "dark"
-          : "light";
+        const systemTheme = await invoke<string>("get_system_theme");
         root.setAttribute("data-theme", systemTheme);
       } else {
         root.setAttribute("data-theme", theme);
       }
     };
+
     applyTheme();
+
+    // Poll for system theme changes when in system mode
     if (theme === "system") {
-      const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-      const handleChange = () => applyTheme();
-      mediaQuery.addEventListener("change", handleChange);
-      return () => mediaQuery.removeEventListener("change", handleChange);
+      intervalId = window.setInterval(applyTheme, 5000);
     }
+
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
   }, [theme]);
 
   // Handle audio playback events

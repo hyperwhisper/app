@@ -328,6 +328,21 @@ fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
 }
 
+#[tauri::command]
+fn get_system_theme() -> String {
+    // On Linux, check gsettings for color-scheme
+    if let Ok(output) = std::process::Command::new("gsettings")
+        .args(["get", "org.gnome.desktop.interface", "color-scheme"])
+        .output()
+    {
+        let result = String::from_utf8_lossy(&output.stdout);
+        if result.contains("dark") {
+            return "dark".to_string();
+        }
+    }
+    "light".to_string()
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let audio_state = AudioState {
@@ -345,6 +360,7 @@ pub fn run() {
             start_recording,
             stop_recording,
             is_recording,
+            get_system_theme,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
