@@ -40,10 +40,17 @@ function App() {
   const [audioFilePath, setAudioFilePath] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [waveformData, setWaveformData] = useState<number[]>([]);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
+  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
+
+  // Save API key to localStorage when it changes
+  useEffect(() => {
+    localStorage.setItem("deepgram_api_key", apiKey);
+  }, [apiKey]);
 
   // Theme handling
   useEffect(() => {
@@ -182,11 +189,55 @@ function App() {
     }
   }, [waveformData, isPlaying, drawWaveform]);
 
+  // Transcribe audio using Deepgram API
+  const transcribeAudio = async (dataUrl: string) => {
+    if (!apiKey.trim()) {
+      return;
+    }
+
+    setIsTranscribing(true);
+    setText("");
+
+    try {
+      // Convert data URL to blob
+      const response = await fetch(dataUrl);
+      const blob = await response.blob();
+
+      // Call Deepgram API
+      const dgResponse = await fetch(
+        "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true",
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Token ${apiKey}`,
+            "Content-Type": "audio/wav",
+          },
+          body: blob,
+        }
+      );
+
+      if (!dgResponse.ok) {
+        const error = await dgResponse.text();
+        throw new Error(`Deepgram API error: ${error}`);
+      }
+
+      const result = await dgResponse.json();
+      const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
+      setText(transcript);
+    } catch (err: any) {
+      console.error("Transcription error:", err);
+      setText(`Error: ${err.message}`);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
   // Start recording
   const startRecording = async () => {
     try {
       await invoke("start_recording");
       setIsRecording(true);
+      setText("");
     } catch (err: any) {
       alert(`Could not start recording: ${err}`);
     }
@@ -202,6 +253,8 @@ function App() {
       setIsRecording(false);
       // Generate waveform after getting audio
       await generateWaveform(dataUrl);
+      // Transcribe the audio
+      await transcribeAudio(dataUrl);
     } catch (err: any) {
       alert(`Could not stop recording: ${err}`);
     }
@@ -280,14 +333,37 @@ function App() {
       )}
 
       <div className="text-box-container">
-        <div className="text-box" spellCheck={false}>
-          {text}
+        <div className={`text-box ${isTranscribing ? "transcribing" : ""}`} spellCheck={false}>
+          {isTranscribing ? (
+            <div className="loading-indicator">
+              <div className="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span className="loading-text">Transcribing...</span>
+            </div>
+          ) : (
+            text || <span className="placeholder">Transcription will appear here...</span>
+          )}
         </div>
-        {text && (
+        {text && !isTranscribing && (
           <button className="copy-btn" onClick={handleCopy}>
             Copy
           </button>
         )}
+      </div>
+
+      <div className="api-key-container">
+        <label htmlFor="api-key">Deepgram API Key</label>
+        <input
+          id="api-key"
+          type="password"
+          value={apiKey}
+          onChange={(e) => setApiKey(e.target.value)}
+          placeholder="Enter your Deepgram API key"
+          className="api-key-input"
+        />
       </div>
     </main>
   );
