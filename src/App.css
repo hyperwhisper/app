@@ -54,27 +54,88 @@
 }
 
 .record-btn {
-  padding: 12px 32px;
-  font-size: 16px;
-  font-weight: 500;
-  font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
-  border: 1px solid transparent;
-  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  padding: 0;
+  color: #ffffff;
+  background-color: #396cd8;
+  border: none;
+  border-radius: 50%;
   cursor: pointer;
-  transition: border-color 0.25s, background-color 0.25s;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 12px rgba(57, 108, 216, 0.3);
   outline: none;
 }
 
 .record-btn:hover {
-  border-color: #396cd8;
+  background-color: #345dc4;
+  transform: scale(1.05);
 }
 
 .record-btn:active {
-  border-color: #396cd8;
-  background-color: #e8e8e8;
+  transform: scale(0.95);
+}
+
+.record-btn.recording {
+  background-color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+  }
+  50% {
+    box-shadow: 0 4px 20px rgba(239, 68, 68, 0.6);
+  }
+}
+
+.waveform-container {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 12px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.waveform-canvas {
+  display: block;
+  border-radius: 4px;
+}
+
+.playback-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  color: #ffffff;
+  background-color: #396cd8;
+  border: none;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 6px rgba(57, 108, 216, 0.3);
+  outline: none;
+  flex-shrink: 0;
+}
+
+.playback-btn:hover {
+  background-color: #345dc4;
+  transform: scale(1.05);
+}
+
+.playback-btn:active {
+  transform: scale(0.95);
 }
 
 .text-box-container {
@@ -138,7 +199,6 @@
 }
 
 [data-theme="dark"] .theme-toggle,
-[data-theme="dark"] .record-btn,
 [data-theme="dark"] .copy-btn {
   color: #ffffff;
   background-color: #0f0f0f98;
@@ -146,15 +206,41 @@
 }
 
 [data-theme="dark"] .theme-toggle:active,
-[data-theme="dark"] .record-btn:active,
 [data-theme="dark"] .copy-btn:active {
   background-color: #0f0f0f69;
 }
 
 [data-theme="dark"] .theme-toggle:hover,
-[data-theme="dark"] .record-btn:hover,
 [data-theme="dark"] .copy-btn:hover {
   border-color: #24c8db;
+}
+
+[data-theme="dark"] .record-btn {
+  background-color: #24c8db;
+  box-shadow: 0 4px 12px rgba(36, 200, 219, 0.3);
+}
+
+[data-theme="dark"] .record-btn:hover {
+  background-color: #1eb3cc;
+}
+
+[data-theme="dark"] .record-btn.recording {
+  background-color: #ef4444;
+  box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+[data-theme="dark"] .playback-btn {
+  background-color: #24c8db;
+  box-shadow: 0 2px 6px rgba(36, 200, 219, 0.3);
+}
+
+[data-theme="dark"] .playback-btn:hover {
+  background-color: #1eb3cc;
+}
+
+[data-theme="dark"] .waveform-container {
+  background-color: #1a1a1a;
+  border-color: #444;
 }
 
 [data-theme="dark"] .text-box {

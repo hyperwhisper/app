@@ -1,16 +1,52 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
 
+// Icons
+const MicIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <line x1="12" x2="12" y1="19" y2="22" />
+  </svg>
+);
+
+const StopIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
+    <rect x="6" y="6" width="12" height="12" rx="1" />
+  </svg>
+);
+
+const PlayIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+    <polygon points="6,4 20,12 6,20" />
+  </svg>
+);
+
+const PauseIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+    <rect x="6" y="4" width="4" height="16" rx="1" />
+    <rect x="14" y="4" width="4" height="16" rx="1" />
+  </svg>
+);
+
 function App() {
   const [text, setText] = useState("");
   const [theme, setTheme] = useState<Theme>("system");
+  const [isRecording, setIsRecording] = useState(false);
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [waveformData, setWaveformData] = useState<number[]>([]);
 
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationRef = useRef<number | null>(null);
+
+  // Theme handling
   useEffect(() => {
     const root = document.documentElement;
-
-    // Function to apply the theme
     const applyTheme = () => {
       if (theme === "system") {
         const systemTheme = window.matchMedia("(prefers-color-scheme: dark)").matches
@@ -21,11 +57,7 @@ function App() {
         root.setAttribute("data-theme", theme);
       }
     };
-
-    // Apply theme immediately
     applyTheme();
-
-    // Listen for system theme changes only when in system mode
     if (theme === "system") {
       const mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
       const handleChange = () => applyTheme();
@@ -34,9 +66,160 @@ function App() {
     }
   }, [theme]);
 
-  function handleRecord() {
-    setText((prev) => prev + "hello world");
-  }
+  // Handle audio playback events
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleEnded = () => setIsPlaying(false);
+    const handlePlay = () => setIsPlaying(true);
+    const handlePause = () => setIsPlaying(false);
+
+    audio.addEventListener("ended", handleEnded);
+    audio.addEventListener("play", handlePlay);
+    audio.addEventListener("pause", handlePause);
+
+    return () => {
+      audio.removeEventListener("ended", handleEnded);
+      audio.removeEventListener("play", handlePlay);
+      audio.removeEventListener("pause", handlePause);
+    };
+  }, [audioUrl]);
+
+  // Generate waveform data from audio URL
+  const generateWaveform = useCallback(async (url: string) => {
+    try {
+      const response = await fetch(url);
+      const arrayBuffer = await response.arrayBuffer();
+      const audioContext = new AudioContext();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      const channelData = audioBuffer.getChannelData(0);
+
+      // Sample the data for visualization (every 100th sample for performance)
+      const samples: number[] = [];
+      const step = Math.ceil(channelData.length / 200);
+      for (let i = 0; i < channelData.length; i += step) {
+        samples.push(Math.abs(channelData[i]));
+      }
+      setWaveformData(samples);
+
+      // Close audio context
+      audioContext.close();
+    } catch (err) {
+      console.error("Error generating waveform:", err);
+    }
+  }, []);
+
+  // Draw waveform on canvas
+  const drawWaveform = useCallback((progress: number = 0) => {
+    const canvas = canvasRef.current;
+    if (!canvas || waveformData.length === 0) return;
+
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const width = canvas.width;
+    const height = canvas.height;
+    const centerY = height / 2;
+    const barWidth = width / waveformData.length;
+    const maxAmplitude = Math.max(...waveformData, 0.1);
+
+    // Clear canvas
+    ctx.clearRect(0, 0, width, height);
+
+    // Get colors based on theme
+    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+    const barColor = isDark ? "#24c8db" : "#396cd8";
+    const playedColor = isDark ? "#535bf2" : "#24c8db";
+
+    waveformData.forEach((amplitude, index) => {
+      const barHeight = (amplitude / maxAmplitude) * (height * 0.8);
+      const x = index * barWidth;
+      const isPlayed = index / waveformData.length < progress;
+
+      ctx.fillStyle = isPlayed ? playedColor : barColor;
+      ctx.fillRect(x, centerY - barHeight / 2, barWidth - 1, barHeight);
+    });
+  }, [waveformData]);
+
+  // Animation loop for playback progress
+  const animatePlayback = useCallback(() => {
+    const audio = audioRef.current;
+    if (!audio || !isPlaying) {
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+      return;
+    }
+
+    const progress = audio.currentTime / audio.duration;
+    drawWaveform(progress);
+
+    animationRef.current = requestAnimationFrame(animatePlayback);
+  }, [isPlaying, drawWaveform]);
+
+  // Update animation when playing state changes
+  useEffect(() => {
+    if (isPlaying) {
+      animatePlayback();
+    } else if (audioUrl && audioRef.current) {
+      // Draw final state
+      const progress = audioRef.current.currentTime / audioRef.current.duration;
+      drawWaveform(isNaN(progress) ? 0 : progress);
+    }
+  }, [isPlaying, audioUrl, animatePlayback, drawWaveform]);
+
+  // Redraw waveform when data changes
+  useEffect(() => {
+    if (waveformData.length > 0 && !isPlaying) {
+      drawWaveform(0);
+    }
+  }, [waveformData, isPlaying, drawWaveform]);
+
+  // Start recording
+  const startRecording = async () => {
+    try {
+      await invoke("start_recording");
+      setIsRecording(true);
+    } catch (err: any) {
+      alert(`Could not start recording: ${err}`);
+    }
+  };
+
+  // Stop recording
+  const stopRecording = async () => {
+    try {
+      const dataUrl = await invoke<string>("stop_recording");
+      setAudioUrl(dataUrl);
+      setIsRecording(false);
+      // Generate waveform after getting audio
+      await generateWaveform(dataUrl);
+    } catch (err: any) {
+      alert(`Could not stop recording: ${err}`);
+    }
+  };
+
+  // Toggle recording
+  const handleRecord = () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      startRecording();
+    }
+  };
+
+  // Toggle playback
+  const handlePlayback = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (isPlaying) {
+      audio.pause();
+    } else {
+      audio.play();
+    }
+  };
 
   function handleCopy() {
     navigator.clipboard.writeText(text);
@@ -61,9 +244,29 @@ function App() {
       <button className="theme-toggle" onClick={cycleTheme}>
         {getThemeLabel()}
       </button>
-      <button className="record-btn" onClick={handleRecord}>
-        Record
+
+      <button
+        className={`record-btn ${isRecording ? "recording" : ""}`}
+        onClick={handleRecord}
+      >
+        {isRecording ? <StopIcon /> : <MicIcon />}
       </button>
+
+      {audioUrl && (
+        <div className="waveform-container">
+          <audio ref={audioRef} src={audioUrl} />
+          <canvas
+            ref={canvasRef}
+            width={400}
+            height={60}
+            className="waveform-canvas"
+          />
+          <button className="playback-btn" onClick={handlePlayback}>
+            {isPlaying ? <PauseIcon /> : <PlayIcon />}
+          </button>
+        </div>
+      )}
+
       <div className="text-box-container">
         <div className="text-box" spellCheck={false}>
           {text}
