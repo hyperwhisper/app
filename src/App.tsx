@@ -67,6 +67,7 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
+  const [focusedApp, setFocusedApp] = useState<string | null>(null);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -79,6 +80,23 @@ function App() {
       invoke("set_api_key", { apiKey });
     }
   }, [apiKey]);
+
+  // Poll for focused window
+  useEffect(() => {
+    const updateFocusedApp = async () => {
+      try {
+        const app = await invoke<string | null>("get_focused_window");
+        setFocusedApp(app);
+      } catch {
+        setFocusedApp(null);
+      }
+    };
+
+    updateFocusedApp();
+    const interval = setInterval(updateFocusedApp, 500);
+
+    return () => clearInterval(interval);
+  }, []);
 
   // Listen for transcription events from backend
   useEffect(() => {
@@ -351,6 +369,12 @@ function App() {
       >
         {isRecording ? <StopIcon /> : <MicIcon />}
       </button>
+
+      {focusedApp && (
+        <div className="focused-app">
+          {focusedApp}
+        </div>
+      )}
 
       {audioUrl && !isRecording && (
         <div className="waveform-container">

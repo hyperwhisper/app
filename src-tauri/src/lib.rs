@@ -475,6 +475,48 @@ fn get_system_theme() -> String {
     "light".to_string()
 }
 
+#[tauri::command]
+fn get_focused_window() -> Option<String> {
+    // Query window-calls GNOME extension via gdbus
+    let output = std::process::Command::new("gdbus")
+        .args([
+            "call", "--session",
+            "--dest", "org.gnome.Shell",
+            "--object-path", "/org/gnome/Shell/Extensions/Windows",
+            "--method", "org.gnome.Shell.Extensions.Windows.List",
+        ])
+        .output()
+        .ok()?;
+
+    let result = String::from_utf8_lossy(&output.stdout);
+
+    // The output format is: ([{'id': ..., 'wm_class': '...', 'focus': true, ...}, ...],)
+    // We need to extract the JSON array from it
+    let json_start = result.find('[')?;
+    let json_end = result.rfind(']')? + 1;
+    let json_str = &result[json_start..json_end];
+
+    // Parse the JSON array
+    let windows: Vec<serde_json::Value> = serde_json::from_str(json_str).ok()?;
+
+    // Find the focused window
+    for window in windows {
+        if window.get("focus").and_then(|f| f.as_bool()) == Some(true) {
+            // Return wm_class (app name) or title as fallback
+            if let Some(wm_class) = window.get("wm_class").and_then(|c| c.as_str()) {
+                if !wm_class.is_empty() {
+                    return Some(wm_class.to_string());
+                }
+            }
+            if let Some(title) = window.get("title").and_then(|t| t.as_str()) {
+                return Some(title.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let audio_state = AudioState {
@@ -493,6 +535,7 @@ pub fn run() {
             stop_recording,
             is_recording,
             get_system_theme,
+            get_focused_window,
             set_api_key,
         ])
         .setup(|app| {

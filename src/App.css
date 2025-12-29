@@ -147,6 +147,18 @@
   }
 }
 
+.focused-app {
+  font-size: 12px;
+  color: #666;
+  padding: 4px 12px;
+  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: 12px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .waveform-container {
   position: relative;
   display: flex;
@@ -327,6 +339,11 @@
 [data-theme="dark"] .record-btn.recording {
   background-color: #ef4444;
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.4);
+}
+
+[data-theme="dark"] .focused-app {
+  color: #999;
+  background-color: rgba(255, 255, 255, 0.1);
 }
 
 [data-theme="dark"] .playback-btn {
