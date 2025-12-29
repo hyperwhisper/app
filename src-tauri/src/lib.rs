@@ -43,9 +43,9 @@ fn to_wav_bytes(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<u8> {
     let mut wav_data = Vec::new();
 
     // WAV header
-    let bytes_per_sample = 2; // 16-bit
-    let byte_rate = sample_rate * channels as u32 * bytes_per_sample;
-    let block_align = channels as u32 * bytes_per_sample;
+    let bytes_per_sample: u16 = 2; // 16-bit
+    let byte_rate = sample_rate * channels as u32 * bytes_per_sample as u32;
+    let block_align: u16 = channels * bytes_per_sample;
     let data_size = samples.len() * bytes_per_sample as usize;
     let file_size = 36 + data_size as u32;
 
