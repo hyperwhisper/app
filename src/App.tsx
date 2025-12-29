@@ -1,8 +1,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
+
+interface TranscriptionEvent {
+  text: string;
+  is_final: boolean;
+}
 
 // Icons
 const MicIcon = () => (
@@ -33,7 +39,8 @@ const PauseIcon = () => (
 );
 
 function App() {
-  const [text, setText] = useState("");
+  const [finalText, setFinalText] = useState("");
+  const [interimText, setInterimText] = useState("");
   const [theme, setTheme] = useState<Theme>("system");
   const [isRecording, setIsRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -41,16 +48,38 @@ function App() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
-  const [isTranscribing, setIsTranscribing] = useState(false);
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
 
-  // Save API key to localStorage when it changes
+  // Save API key to localStorage and send to backend
   useEffect(() => {
     localStorage.setItem("deepgram_api_key", apiKey);
+    if (apiKey.trim()) {
+      invoke("set_api_key", { apiKey });
+    }
   }, [apiKey]);
+
+  // Listen for transcription events from backend
+  useEffect(() => {
+    const unlisten = listen<TranscriptionEvent>("transcription", (event) => {
+      const { text, is_final } = event.payload;
+
+      if (is_final) {
+        if (text) {
+          setFinalText((prev) => prev + (prev ? " " : "") + text);
+        }
+        setInterimText("");
+      } else {
+        setInterimText(text);
+      }
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Theme handling
   useEffect(() => {
@@ -68,7 +97,6 @@ function App() {
 
     applyTheme();
 
-    // Poll for system theme changes when in system mode
     if (theme === "system") {
       intervalId = window.setInterval(applyTheme, 5000);
     }
@@ -107,15 +135,12 @@ function App() {
       const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
       const channelData = audioBuffer.getChannelData(0);
 
-      // Sample the data for visualization (every 100th sample for performance)
       const samples: number[] = [];
       const step = Math.ceil(channelData.length / 200);
       for (let i = 0; i < channelData.length; i += step) {
         samples.push(Math.abs(channelData[i]));
       }
       setWaveformData(samples);
-
-      // Close audio context
       audioContext.close();
     } catch (err) {
       console.error("Error generating waveform:", err);
@@ -136,10 +161,8 @@ function App() {
     const barWidth = width / waveformData.length;
     const maxAmplitude = Math.max(...waveformData, 0.1);
 
-    // Clear canvas
     ctx.clearRect(0, 0, width, height);
 
-    // Get colors based on theme
     const isDark = document.documentElement.getAttribute("data-theme") === "dark";
     const barColor = isDark ? "#24c8db" : "#396cd8";
     const playedColor = isDark ? "#535bf2" : "#24c8db";
@@ -171,73 +194,36 @@ function App() {
     animationRef.current = requestAnimationFrame(animatePlayback);
   }, [isPlaying, drawWaveform]);
 
-  // Update animation when playing state changes
   useEffect(() => {
     if (isPlaying) {
       animatePlayback();
     } else if (audioUrl && audioRef.current) {
-      // Draw final state
       const progress = audioRef.current.currentTime / audioRef.current.duration;
       drawWaveform(isNaN(progress) ? 0 : progress);
     }
   }, [isPlaying, audioUrl, animatePlayback, drawWaveform]);
 
-  // Redraw waveform when data changes
   useEffect(() => {
     if (waveformData.length > 0 && !isPlaying) {
       drawWaveform(0);
     }
   }, [waveformData, isPlaying, drawWaveform]);
 
-  // Transcribe audio using Deepgram API
-  const transcribeAudio = async (dataUrl: string) => {
+  // Start recording
+  const startRecording = async () => {
     if (!apiKey.trim()) {
+      alert("Please enter your Deepgram API key first");
       return;
     }
 
-    setIsTranscribing(true);
-    setText("");
-
     try {
-      // Convert data URL to blob
-      const response = await fetch(dataUrl);
-      const blob = await response.blob();
+      setFinalText("");
+      setInterimText("");
+      setAudioUrl(null);
+      setAudioFilePath(null);
 
-      // Call Deepgram API
-      const dgResponse = await fetch(
-        "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true",
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Token ${apiKey}`,
-            "Content-Type": "audio/wav",
-          },
-          body: blob,
-        }
-      );
-
-      if (!dgResponse.ok) {
-        const error = await dgResponse.text();
-        throw new Error(`Deepgram API error: ${error}`);
-      }
-
-      const result = await dgResponse.json();
-      const transcript = result.results?.channels?.[0]?.alternatives?.[0]?.transcript || "";
-      setText(transcript);
-    } catch (err: any) {
-      console.error("Transcription error:", err);
-      setText(`Error: ${err.message}`);
-    } finally {
-      setIsTranscribing(false);
-    }
-  };
-
-  // Start recording
-  const startRecording = async () => {
-    try {
       await invoke("start_recording");
       setIsRecording(true);
-      setText("");
     } catch (err: any) {
       alert(`Could not start recording: ${err}`);
     }
@@ -251,12 +237,11 @@ function App() {
       setAudioUrl(dataUrl);
       setAudioFilePath(filePath);
       setIsRecording(false);
-      // Generate waveform after getting audio
+      setInterimText("");
       await generateWaveform(dataUrl);
-      // Transcribe the audio
-      await transcribeAudio(dataUrl);
     } catch (err: any) {
       alert(`Could not stop recording: ${err}`);
+      setIsRecording(false);
     }
   };
 
@@ -282,7 +267,7 @@ function App() {
   };
 
   function handleCopy() {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(finalText);
   }
 
   function cycleTheme() {
@@ -312,7 +297,7 @@ function App() {
         {isRecording ? <StopIcon /> : <MicIcon />}
       </button>
 
-      {audioUrl && (
+      {audioUrl && !isRecording && (
         <div className="waveform-container">
           <audio ref={audioRef} src={audioUrl} />
           <div className="waveform-controls">
@@ -333,21 +318,19 @@ function App() {
       )}
 
       <div className="text-box-container">
-        <div className={`text-box ${isTranscribing ? "transcribing" : ""}`} spellCheck={false}>
-          {isTranscribing ? (
-            <div className="loading-indicator">
-              <div className="loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-              <span className="loading-text">Transcribing...</span>
-            </div>
+        <div className="text-box" spellCheck={false}>
+          {finalText || interimText ? (
+            <>
+              <span>{finalText}</span>
+              {interimText && <span className="interim-text">{finalText ? " " : ""}{interimText}</span>}
+            </>
           ) : (
-            text || <span className="placeholder">Transcription will appear here...</span>
+            <span className="placeholder">
+              {isRecording ? "Listening..." : "Transcription will appear here..."}
+            </span>
           )}
         </div>
-        {text && !isTranscribing && (
+        {finalText && !isRecording && (
           <button className="copy-btn" onClick={handleCopy}>
             Copy
           </button>

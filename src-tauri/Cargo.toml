@@ -26,6 +26,9 @@ cpal = "0.15"
 base64 = "0.22"
 chrono = "0.4"
 dirs = "5"
+tungstenite = { version = "0.21", features = ["native-tls"] }
+native-tls = "0.2"
+url = "2"
 
 [dependencies.async-trait]
 version = "0.1"

@@ -323,6 +323,11 @@
   font-style: italic;
 }
 
+.text-box .interim-text {
+  color: #888;
+  font-style: italic;
+}
+
 /* API Key input */
 .api-key-container {
   width: 100%;
@@ -369,6 +374,10 @@
 
 [data-theme="dark"] .text-box .placeholder {
   color: #666;
+}
+
+[data-theme="dark"] .text-box .interim-text {
+  color: #777;
 }
 
 [data-theme="dark"] .api-key-container label {
