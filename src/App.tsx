@@ -37,6 +37,7 @@ function App() {
   const [theme, setTheme] = useState<Theme>("system");
   const [isRecording, setIsRecording] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioFilePath, setAudioFilePath] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [waveformData, setWaveformData] = useState<number[]>([]);
 
@@ -190,8 +191,10 @@ function App() {
   // Stop recording
   const stopRecording = async () => {
     try {
-      const dataUrl = await invoke<string>("stop_recording");
+      const response = await invoke<string>("stop_recording");
+      const { dataUrl, filePath } = JSON.parse(response);
       setAudioUrl(dataUrl);
+      setAudioFilePath(filePath);
       setIsRecording(false);
       // Generate waveform after getting audio
       await generateWaveform(dataUrl);
@@ -255,15 +258,20 @@ function App() {
       {audioUrl && (
         <div className="waveform-container">
           <audio ref={audioRef} src={audioUrl} />
-          <canvas
-            ref={canvasRef}
-            width={400}
-            height={60}
-            className="waveform-canvas"
-          />
-          <button className="playback-btn" onClick={handlePlayback}>
-            {isPlaying ? <PauseIcon /> : <PlayIcon />}
-          </button>
+          <div className="waveform-controls">
+            <canvas
+              ref={canvasRef}
+              width={400}
+              height={60}
+              className="waveform-canvas"
+            />
+            <button className="playback-btn" onClick={handlePlayback}>
+              {isPlaying ? <PauseIcon /> : <PlayIcon />}
+            </button>
+          </div>
+          {audioFilePath && (
+            <div className="file-path">{audioFilePath}</div>
+          )}
         </div>
       )}
 

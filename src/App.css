@@ -97,6 +97,7 @@
 .waveform-container {
   position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
   gap: 12px;
   padding: 16px;
@@ -104,6 +105,21 @@
   border: 1px solid #e0e0e0;
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.waveform-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.file-path {
+  font-size: 11px;
+  color: #666;
+  font-family: monospace;
+  word-break: break-all;
+  text-align: center;
+  max-width: 100%;
 }
 
 .waveform-canvas {
@@ -247,4 +263,8 @@
   color: #f6f6f6;
   background-color: #1a1a1a;
   border-color: #444;
+}
+
+[data-theme="dark"] .file-path {
+  color: #999;
 }

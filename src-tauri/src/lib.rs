@@ -1,10 +1,13 @@
+use chrono::Local;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
+use std::fs;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tauri::State;
-use tokio::sync::RwLock;
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
 
 // Application state for audio recording
 pub struct AudioState {
@@ -12,6 +15,20 @@ pub struct AudioState {
     recorded_data: Arc<RwLock<Vec<Vec<u8>>>>,
     sample_rate: Arc<Mutex<Option<u32>>>,
     stop_signal: Arc<Mutex<Option<mpsc::Sender<()>>>>,
+}
+
+// Get the recordings directory, creating it if necessary
+fn get_recordings_dir() -> Result<PathBuf, String> {
+    let data_dir = dirs::data_local_dir()
+        .ok_or_else(|| "Could not find local data directory".to_string())?;
+    let recordings_dir = data_dir.join("hyperwhisper").join("recordings");
+
+    if !recordings_dir.exists() {
+        fs::create_dir_all(&recordings_dir)
+            .map_err(|e| format!("Failed to create recordings directory: {}", e))?;
+    }
+
+    Ok(recordings_dir)
 }
 
 // Helper function to get the default audio input device
@@ -272,6 +289,15 @@ async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> 
     let sample_rate = state.sample_rate.lock().unwrap().unwrap_or(48000);
     let wav_bytes = to_wav_bytes(&all_samples, sample_rate, 1);
 
+    // Save to disk
+    let recordings_dir = get_recordings_dir()?;
+    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let file_name = format!("{}.wav", timestamp);
+    let file_path = recordings_dir.join(&file_name);
+
+    fs::write(&file_path, &wav_bytes)
+        .map_err(|e| format!("Failed to save recording: {}", e))?;
+
     // Encode as base64 for easy transmission
     use base64::Engine;
     let base64_audio = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
@@ -283,7 +309,13 @@ async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> 
     drop(data_chunks);
     *state.recorded_data.write().await = Vec::new();
 
-    Ok(data_url)
+    // Return JSON with both data URL and file path
+    let response = serde_json::json!({
+        "dataUrl": data_url,
+        "filePath": file_path.to_string_lossy()
+    });
+
+    Ok(response.to_string())
 }
 
 #[tauri::command]
