@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
@@ -35,6 +36,24 @@ const PauseIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
     <rect x="6" y="4" width="4" height="16" rx="1" />
     <rect x="14" y="4" width="4" height="16" rx="1" />
+  </svg>
+);
+
+const MinimizeIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+    <rect x="1" y="5.5" width="10" height="1" />
+  </svg>
+);
+
+const MaximizeIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
+    <rect x="1.5" y="1.5" width="9" height="9" />
+  </svg>
+);
+
+const CloseIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+    <path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 );
 
@@ -284,11 +303,30 @@ function App() {
     return "Dark";
   }
 
+  const handleMinimize = () => getCurrentWindow().minimize();
+  const handleMaximize = () => getCurrentWindow().toggleMaximize();
+  const handleClose = () => getCurrentWindow().close();
+  const handleDrag = () => getCurrentWindow().startDragging();
+
   return (
     <main className="container">
-      <button className="theme-toggle" onClick={cycleTheme}>
-        {getThemeLabel()}
-      </button>
+      <div className="titlebar" onMouseDown={handleDrag}>
+        <span className="titlebar-title">hyperwhisper</span>
+        <div className="titlebar-controls" onMouseDown={(e) => e.stopPropagation()}>
+          <button className="theme-toggle" onClick={cycleTheme}>
+            {getThemeLabel()}
+          </button>
+          <button className="titlebar-btn" onClick={handleMinimize}>
+            <MinimizeIcon />
+          </button>
+          <button className="titlebar-btn" onClick={handleMaximize}>
+            <MaximizeIcon />
+          </button>
+          <button className="titlebar-btn titlebar-btn-close" onClick={handleClose}>
+            <CloseIcon />
+          </button>
+        </div>
+      </div>
 
       <button
         className={`record-btn ${isRecording ? "recording" : ""}`}

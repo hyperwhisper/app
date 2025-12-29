@@ -17,6 +17,7 @@
 .container {
   margin: 0;
   padding: 40px;
+  padding-top: 60px;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -26,22 +27,74 @@
   position: relative;
 }
 
+/* Title bar */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 0 16px;
+  background-color: #f6f6f6;
+  border-bottom: 1px solid #e0e0e0;
+  user-select: none;
+  cursor: default;
+  z-index: 1000;
+}
+
+.titlebar-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #666;
+}
+
+.titlebar-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.titlebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  color: #666;
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+
+.titlebar-btn:hover {
+  background-color: rgba(0, 0, 0, 0.08);
+  color: #333;
+}
+
+.titlebar-btn-close:hover {
+  background-color: #e81123;
+  color: #fff;
+}
+
 .theme-toggle {
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  padding: 8px 16px;
-  font-size: 12px;
+  padding: 4px 10px;
+  font-size: 11px;
   font-weight: 500;
   font-family: inherit;
-  color: #0f0f0f;
-  background-color: #ffffff;
+  color: #666;
+  background-color: transparent;
   border: 1px solid #e0e0e0;
-  border-radius: 6px;
+  border-radius: 4px;
   cursor: pointer;
-  transition: border-color 0.25s, background-color 0.25s;
-  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  transition: border-color 0.15s, background-color 0.15s;
   outline: none;
+  margin-right: 8px;
 }
 
 .theme-toggle:hover {
@@ -214,19 +267,50 @@
   background-color: #2f2f2f;
 }
 
-[data-theme="dark"] .theme-toggle,
+[data-theme="dark"] .titlebar {
+  background-color: #2f2f2f;
+  border-bottom-color: #444;
+}
+
+[data-theme="dark"] .titlebar-title {
+  color: #999;
+}
+
+[data-theme="dark"] .titlebar-btn {
+  color: #999;
+}
+
+[data-theme="dark"] .titlebar-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+[data-theme="dark"] .titlebar-btn-close:hover {
+  background-color: #e81123;
+  color: #fff;
+}
+
+[data-theme="dark"] .theme-toggle {
+  color: #999;
+  background-color: transparent;
+  border-color: #555;
+}
+
+[data-theme="dark"] .theme-toggle:hover {
+  border-color: #24c8db;
+  color: #fff;
+}
+
 [data-theme="dark"] .copy-btn {
   color: #ffffff;
   background-color: #0f0f0f98;
   border-color: transparent;
 }
 
-[data-theme="dark"] .theme-toggle:active,
 [data-theme="dark"] .copy-btn:active {
   background-color: #0f0f0f69;
 }
 
-[data-theme="dark"] .theme-toggle:hover,
 [data-theme="dark"] .copy-btn:hover {
   border-color: #24c8db;
 }
