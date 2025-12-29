@@ -1,4 +1,4 @@
-use chrono::Local;
+use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use std::fs;
@@ -418,7 +418,7 @@ async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> 
 
     // Save to disk
     let recordings_dir = get_recordings_dir()?;
-    let timestamp = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let timestamp = Utc::now().format("%Y%m%d-%H%M%SUTC").to_string();
     let file_name = format!("{}.wav", timestamp);
     let file_path = recordings_dir.join(&file_name);
 
