@@ -7,10 +7,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
+use zbus::interface;
 
 // Application state for audio recording
 pub struct AudioState {
@@ -19,6 +20,20 @@ pub struct AudioState {
     sample_rate: Arc<Mutex<Option<u32>>>,
     stop_signal: Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>,
     api_key: Arc<Mutex<Option<String>>>,
+}
+
+// D-Bus service for external control
+struct HyperWhisperDBus {
+    app_handle: AppHandle,
+}
+
+#[interface(name = "com.cc.hyperwhisper")]
+impl HyperWhisperDBus {
+    async fn toggle_recording(&self) -> bool {
+        // Emit event to frontend to toggle recording
+        let _ = self.app_handle.emit("recording-toggled", ());
+        true
+    }
 }
 
 // Transcription event payload
@@ -480,6 +495,32 @@ pub fn run() {
             get_system_theme,
             set_api_key,
         ])
+        .setup(|app| {
+            let handle = app.handle().clone();
+
+            // Spawn D-Bus service for external control
+            tauri::async_runtime::spawn(async move {
+                let service = HyperWhisperDBus { app_handle: handle };
+
+                match zbus::connection::Builder::session()
+                    .and_then(|b| b.name("com.cc.hyperwhisper"))
+                    .and_then(|b| b.serve_at("/com/cc/hyperwhisper", service))
+                {
+                    Ok(builder) => {
+                        match builder.build().await {
+                            Ok(_conn) => {
+                                // Keep connection alive
+                                std::future::pending::<()>().await;
+                            }
+                            Err(e) => eprintln!("Failed to build D-Bus connection: {}", e),
+                        }
+                    }
+                    Err(e) => eprintln!("Failed to setup D-Bus service: {}", e),
+                }
+            });
+
+            Ok(())
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

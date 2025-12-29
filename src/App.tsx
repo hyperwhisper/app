@@ -100,6 +100,20 @@ function App() {
     };
   }, []);
 
+  // Store handleRecord in a ref so the D-Bus listener always has the latest version
+  const handleRecordRef = useRef<() => void>(() => {});
+
+  // Listen for D-Bus toggle events (from global keyboard shortcut)
+  useEffect(() => {
+    const unlisten = listen("recording-toggled", () => {
+      handleRecordRef.current();
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // Theme handling
   useEffect(() => {
     const root = document.documentElement;
@@ -272,6 +286,9 @@ function App() {
       startRecording();
     }
   };
+
+  // Keep ref updated for D-Bus listener
+  handleRecordRef.current = handleRecord;
 
   // Toggle playback
   const handlePlayback = () => {
