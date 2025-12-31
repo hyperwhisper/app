@@ -476,6 +476,37 @@ fn get_system_theme() -> String {
 }
 
 #[tauri::command]
+fn type_text(text: String) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    // Try wtype first (Wayland)
+    let wtype_result = std::process::Command::new("wtype")
+        .arg(&text)
+        .status();
+
+    if let Ok(status) = wtype_result {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    // Fall back to xdotool (X11)
+    let xdotool_result = std::process::Command::new("xdotool")
+        .args(["type", "--clearmodifiers", &text])
+        .status();
+
+    if let Ok(status) = xdotool_result {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    Err("Failed to type text: neither wtype nor xdotool available".to_string())
+}
+
+#[tauri::command]
 fn get_focused_window() -> Option<String> {
     // Query window-calls GNOME extension via gdbus
     let output = std::process::Command::new("gdbus")
@@ -537,6 +568,7 @@ pub fn run() {
             get_system_theme,
             get_focused_window,
             set_api_key,
+            type_text,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

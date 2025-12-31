@@ -72,6 +72,12 @@ function App() {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
+  const finalTextRef = useRef<string>("");
+
+  // Keep ref in sync with state for use in callbacks
+  useEffect(() => {
+    finalTextRef.current = finalText;
+  }, [finalText]);
 
   // Save API key to localStorage and send to backend
   useEffect(() => {
@@ -290,6 +296,18 @@ function App() {
       setIsRecording(false);
       setInterimText("");
       await generateWaveform(dataUrl);
+
+      // Wait briefly for any final transcription events, then type text to active window
+      setTimeout(async () => {
+        const textToType = finalTextRef.current;
+        if (textToType) {
+          try {
+            await invoke("type_text", { text: textToType });
+          } catch (err) {
+            console.error("Failed to type text:", err);
+          }
+        }
+      }, 200);
     } catch (err: any) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);
