@@ -57,6 +57,8 @@ const CloseIcon = () => (
   </svg>
 );
 
+const DEFAULT_PROMPT = "You are a helpful assistant. Process the following transcription and provide a refined response:";
+
 function App() {
   const [finalText, setFinalText] = useState("");
   const [interimText, setInterimText] = useState("");
@@ -68,6 +70,15 @@ function App() {
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
   const [focusedApp, setFocusedApp] = useState<string | null>(null);
+
+  // LLM state
+  const [llmPrompt, setLlmPrompt] = useState(() => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT);
+  const [llmResponse, setLlmResponse] = useState("");
+  const [isProcessingLlm, setIsProcessingLlm] = useState(false);
+  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("openrouter_api_key") || "");
+  const [typeOutput, setTypeOutput] = useState<"transcription" | "llm">(() =>
+    (localStorage.getItem("type_output") as "transcription" | "llm") || "transcription"
+  );
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -86,6 +97,19 @@ function App() {
       invoke("set_api_key", { apiKey });
     }
   }, [apiKey]);
+
+  // Save LLM prompt and OpenRouter API key to localStorage
+  useEffect(() => {
+    localStorage.setItem("llm_prompt", llmPrompt);
+  }, [llmPrompt]);
+
+  useEffect(() => {
+    localStorage.setItem("openrouter_api_key", openRouterApiKey);
+  }, [openRouterApiKey]);
+
+  useEffect(() => {
+    localStorage.setItem("type_output", typeOutput);
+  }, [typeOutput]);
 
   // Poll for focused window
   useEffect(() => {
@@ -266,6 +290,56 @@ function App() {
     }
   }, [waveformData, isPlaying, drawWaveform]);
 
+  // Call OpenRouter API with transcription
+  const processWithLlm = async (transcription: string, shouldType: boolean) => {
+    if (!openRouterApiKey.trim() || !transcription.trim()) {
+      return;
+    }
+
+    setIsProcessingLlm(true);
+    setLlmResponse("");
+
+    try {
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${openRouterApiKey}`,
+        },
+        body: JSON.stringify({
+          model: "openai/gpt-4.1-nano",
+          messages: [
+            { role: "system", content: llmPrompt },
+            { role: "user", content: transcription }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`API error: ${error}`);
+      }
+
+      const data = await response.json();
+      const llmText = data.choices?.[0]?.message?.content || "";
+      setLlmResponse(llmText);
+
+      // Type LLM response if that's what user selected
+      if (shouldType && llmText) {
+        try {
+          await invoke("type_text", { text: llmText });
+        } catch (err) {
+          console.error("Failed to type LLM response:", err);
+        }
+      }
+    } catch (err: any) {
+      console.error("LLM processing error:", err);
+      setLlmResponse(`Error: ${err.message}`);
+    } finally {
+      setIsProcessingLlm(false);
+    }
+  };
+
   // Start recording
   const startRecording = async () => {
     if (!apiKey.trim()) {
@@ -297,15 +371,20 @@ function App() {
       setInterimText("");
       await generateWaveform(dataUrl);
 
-      // Wait briefly for any final transcription events, then type text to active window
+      // Wait briefly for any final transcription events, then process
       setTimeout(async () => {
         const textToType = finalTextRef.current;
         if (textToType) {
-          try {
-            await invoke("type_text", { text: textToType });
-          } catch (err) {
-            console.error("Failed to type text:", err);
+          // Type transcription if that's what user selected
+          if (typeOutput === "transcription") {
+            try {
+              await invoke("type_text", { text: textToType });
+            } catch (err) {
+              console.error("Failed to type text:", err);
+            }
           }
+          // Process with LLM (will type if typeOutput is "llm")
+          processWithLlm(textToType, typeOutput === "llm");
         }
       }, 200);
     } catch (err: any) {
@@ -394,6 +473,21 @@ function App() {
         </div>
       )}
 
+      <div className="output-toggle">
+        <button
+          className={`toggle-btn ${typeOutput === "transcription" ? "active" : ""}`}
+          onClick={() => setTypeOutput("transcription")}
+        >
+          Transcription
+        </button>
+        <button
+          className={`toggle-btn ${typeOutput === "llm" ? "active" : ""}`}
+          onClick={() => setTypeOutput("llm")}
+        >
+          LLM Response
+        </button>
+      </div>
+
       {audioUrl && !isRecording && (
         <div className="waveform-container">
           <audio ref={audioRef} src={audioUrl} />
@@ -434,6 +528,45 @@ function App() {
         )}
       </div>
 
+      <div className="text-box-container">
+        <label className="section-label">LLM Response</label>
+        <div className="text-box llm-response-box" spellCheck={false}>
+          {isProcessingLlm ? (
+            <div className="loading-indicator">
+              <div className="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span className="loading-text">Processing with LLM...</span>
+            </div>
+          ) : llmResponse ? (
+            <span>{llmResponse}</span>
+          ) : (
+            <span className="placeholder">
+              LLM response will appear here...
+            </span>
+          )}
+        </div>
+        {llmResponse && !isProcessingLlm && (
+          <button className="copy-btn" onClick={() => navigator.clipboard.writeText(llmResponse)}>
+            Copy
+          </button>
+        )}
+      </div>
+
+      <div className="prompt-container">
+        <label htmlFor="llm-prompt">LLM Prompt</label>
+        <textarea
+          id="llm-prompt"
+          value={llmPrompt}
+          onChange={(e) => setLlmPrompt(e.target.value)}
+          placeholder="Enter your custom prompt..."
+          className="prompt-input"
+          rows={3}
+        />
+      </div>
+
       <div className="api-key-container">
         <label htmlFor="api-key">Deepgram API Key</label>
         <input
@@ -442,6 +575,18 @@ function App() {
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           placeholder="Enter your Deepgram API key"
+          className="api-key-input"
+        />
+      </div>
+
+      <div className="api-key-container">
+        <label htmlFor="openrouter-api-key">OpenRouter API Key</label>
+        <input
+          id="openrouter-api-key"
+          type="password"
+          value={openRouterApiKey}
+          onChange={(e) => setOpenRouterApiKey(e.target.value)}
+          placeholder="Enter your OpenRouter API key"
           className="api-key-input"
         />
       </div>

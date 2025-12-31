@@ -498,3 +498,142 @@
 [data-theme="dark"] .api-key-input::placeholder {
   color: #666;
 }
+
+/* Section labels */
+.section-label {
+  display: block;
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  margin-bottom: 8px;
+}
+
+[data-theme="dark"] .section-label {
+  color: #999;
+}
+
+/* Prompt textarea */
+.prompt-container {
+  width: 100%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.prompt-container label {
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+}
+
+.prompt-input {
+  padding: 12px 16px;
+  font-size: 14px;
+  font-family: inherit;
+  color: #0f0f0f;
+  background-color: #ffffff;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  outline: none;
+  transition: border-color 0.25s;
+  resize: vertical;
+  min-height: 80px;
+  line-height: 1.5;
+}
+
+.prompt-input:focus {
+  border-color: #396cd8;
+}
+
+.prompt-input::placeholder {
+  color: #999;
+}
+
+[data-theme="dark"] .prompt-container label {
+  color: #999;
+}
+
+[data-theme="dark"] .prompt-input {
+  color: #f6f6f6;
+  background-color: #1a1a1a;
+  border-color: #444;
+}
+
+[data-theme="dark"] .prompt-input:focus {
+  border-color: #24c8db;
+}
+
+[data-theme="dark"] .prompt-input::placeholder {
+  color: #666;
+}
+
+/* LLM response box */
+.llm-response-box {
+  min-height: 150px;
+}
+
+/* Output toggle */
+.output-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e0e0e0;
+}
+
+.toggle-btn {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: #666;
+  background-color: #ffffff;
+  border: none;
+  cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+  outline: none;
+}
+
+.toggle-btn:first-child {
+  border-right: 1px solid #e0e0e0;
+}
+
+.toggle-btn:hover {
+  background-color: #f0f0f0;
+}
+
+.toggle-btn.active {
+  background-color: #396cd8;
+  color: #ffffff;
+}
+
+.toggle-btn.active:hover {
+  background-color: #345dc4;
+}
+
+[data-theme="dark"] .output-toggle {
+  border-color: #444;
+}
+
+[data-theme="dark"] .toggle-btn {
+  color: #999;
+  background-color: #1a1a1a;
+}
+
+[data-theme="dark"] .toggle-btn:first-child {
+  border-right-color: #444;
+}
+
+[data-theme="dark"] .toggle-btn:hover {
+  background-color: #2a2a2a;
+}
+
+[data-theme="dark"] .toggle-btn.active {
+  background-color: #24c8db;
+  color: #0f0f0f;
+}
+
+[data-theme="dark"] .toggle-btn.active:hover {
+  background-color: #1eb3cc;
+}
