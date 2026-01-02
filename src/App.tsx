@@ -11,6 +11,11 @@ interface TranscriptionEvent {
   is_final: boolean;
 }
 
+interface LlmResponseEvent {
+  text: string;
+  is_error: boolean;
+}
+
 // Icons
 const MicIcon = () => (
   <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -101,10 +106,14 @@ function App() {
   // Save LLM prompt and OpenRouter API key to localStorage
   useEffect(() => {
     localStorage.setItem("llm_prompt", llmPrompt);
+    invoke("set_llm_prompt", { prompt: llmPrompt });
   }, [llmPrompt]);
 
   useEffect(() => {
     localStorage.setItem("openrouter_api_key", openRouterApiKey);
+    if (openRouterApiKey.trim()) {
+      invoke("set_openrouter_api_key", { apiKey: openRouterApiKey });
+    }
   }, [openRouterApiKey]);
 
   useEffect(() => {
@@ -145,6 +154,25 @@ function App() {
 
     return () => {
       unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for LLM events from backend
+  useEffect(() => {
+    const unlistenProcessing = listen<boolean>("llm-processing", (event) => {
+      setIsProcessingLlm(event.payload);
+      if (event.payload) {
+        setLlmResponse("");
+      }
+    });
+
+    const unlistenResponse = listen<LlmResponseEvent>("llm-response", (event) => {
+      setLlmResponse(event.payload.text);
+    });
+
+    return () => {
+      unlistenProcessing.then((fn) => fn());
+      unlistenResponse.then((fn) => fn());
     };
   }, []);
 
@@ -290,56 +318,6 @@ function App() {
     }
   }, [waveformData, isPlaying, drawWaveform]);
 
-  // Call OpenRouter API with transcription
-  const processWithLlm = async (transcription: string, shouldType: boolean) => {
-    if (!openRouterApiKey.trim() || !transcription.trim()) {
-      return;
-    }
-
-    setIsProcessingLlm(true);
-    setLlmResponse("");
-
-    try {
-      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${openRouterApiKey}`,
-        },
-        body: JSON.stringify({
-          model: "openai/gpt-4.1-nano",
-          messages: [
-            { role: "system", content: llmPrompt },
-            { role: "user", content: transcription }
-          ]
-        })
-      });
-
-      if (!response.ok) {
-        const error = await response.text();
-        throw new Error(`API error: ${error}`);
-      }
-
-      const data = await response.json();
-      const llmText = data.choices?.[0]?.message?.content || "";
-      setLlmResponse(llmText);
-
-      // Type LLM response if that's what user selected
-      if (shouldType && llmText) {
-        try {
-          await invoke("type_text", { text: llmText });
-        } catch (err) {
-          console.error("Failed to type LLM response:", err);
-        }
-      }
-    } catch (err: any) {
-      console.error("LLM processing error:", err);
-      setLlmResponse(`Error: ${err.message}`);
-    } finally {
-      setIsProcessingLlm(false);
-    }
-  };
-
   // Start recording
   const startRecording = async () => {
     if (!apiKey.trim()) {
@@ -383,8 +361,17 @@ function App() {
               console.error("Failed to type text:", err);
             }
           }
-          // Process with LLM (will type if typeOutput is "llm")
-          processWithLlm(textToType, typeOutput === "llm");
+          // Process with LLM via Rust backend (will type if typeOutput is "llm")
+          if (openRouterApiKey.trim()) {
+            try {
+              await invoke("process_with_llm", {
+                transcription: textToType,
+                shouldType: typeOutput === "llm"
+              });
+            } catch (err) {
+              console.error("Failed to process with LLM:", err);
+            }
+          }
         }
       }, 200);
     } catch (err: any) {

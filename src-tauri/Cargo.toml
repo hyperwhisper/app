@@ -30,6 +30,7 @@ tungstenite = { version = "0.21", features = ["native-tls"] }
 native-tls = "0.2"
 url = "2"
 zbus = "4"
+ureq = { version = "2", features = ["json"] }
 
 [dependencies.async-trait]
 version = "0.1"

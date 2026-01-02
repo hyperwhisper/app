@@ -20,6 +20,9 @@ pub struct AudioState {
     sample_rate: Arc<Mutex<Option<u32>>>,
     stop_signal: Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>,
     api_key: Arc<Mutex<Option<String>>>,
+    // LLM settings
+    openrouter_api_key: Arc<Mutex<Option<String>>>,
+    llm_prompt: Arc<Mutex<String>>,
 }
 
 // D-Bus service for external control
@@ -159,6 +162,135 @@ fn connect_to_deepgram(api_key: &str, sample_rate: u32) -> Result<WebSocket<Mayb
 #[tauri::command]
 fn set_api_key(state: State<'_, AudioState>, api_key: String) {
     *state.api_key.lock().unwrap() = Some(api_key);
+}
+
+#[tauri::command]
+fn set_openrouter_api_key(state: State<'_, AudioState>, api_key: String) {
+    *state.openrouter_api_key.lock().unwrap() = Some(api_key);
+}
+
+#[tauri::command]
+fn set_llm_prompt(state: State<'_, AudioState>, prompt: String) {
+    *state.llm_prompt.lock().unwrap() = prompt;
+}
+
+// LLM response event payload
+#[derive(Clone, serde::Serialize)]
+struct LlmResponseEvent {
+    text: String,
+    is_error: bool,
+}
+
+#[tauri::command]
+async fn process_with_llm(
+    state: State<'_, AudioState>,
+    app_handle: AppHandle,
+    transcription: String,
+    should_type: bool,
+) -> Result<(), String> {
+    let api_key = state.openrouter_api_key.lock().unwrap().clone()
+        .ok_or_else(|| "OpenRouter API key not set".to_string())?;
+
+    let prompt = state.llm_prompt.lock().unwrap().clone();
+
+    if transcription.trim().is_empty() {
+        return Ok(());
+    }
+
+    // Emit processing started event
+    let _ = app_handle.emit("llm-processing", true);
+
+    // Spawn blocking thread for HTTP request
+    let app_handle_clone = app_handle.clone();
+    std::thread::spawn(move || {
+        let result = call_openrouter(&api_key, &prompt, &transcription);
+
+        match result {
+            Ok(response_text) => {
+                // Emit response
+                let _ = app_handle_clone.emit("llm-response", LlmResponseEvent {
+                    text: response_text.clone(),
+                    is_error: false,
+                });
+
+                // Type if requested
+                if should_type && !response_text.is_empty() {
+                    let _ = type_text_internal(&response_text);
+                }
+            }
+            Err(e) => {
+                let _ = app_handle_clone.emit("llm-response", LlmResponseEvent {
+                    text: format!("Error: {}", e),
+                    is_error: true,
+                });
+            }
+        }
+
+        // Emit processing done
+        let _ = app_handle_clone.emit("llm-processing", false);
+    });
+
+    Ok(())
+}
+
+fn call_openrouter(api_key: &str, prompt: &str, transcription: &str) -> Result<String, String> {
+    let request_body = serde_json::json!({
+        "model": "openai/gpt-4.1-nano",
+        "messages": [
+            { "role": "system", "content": prompt },
+            { "role": "user", "content": transcription }
+        ]
+    });
+
+    let response = ureq::post("https://openrouter.ai/api/v1/chat/completions")
+        .set("Content-Type", "application/json")
+        .set("Authorization", &format!("Bearer {}", api_key))
+        .send_json(&request_body)
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    let json: serde_json::Value = response.into_json()
+        .map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    let text = json
+        .get("choices")
+        .and_then(|c| c.get(0))
+        .and_then(|c| c.get("message"))
+        .and_then(|m| m.get("content"))
+        .and_then(|c| c.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    Ok(text)
+}
+
+fn type_text_internal(text: &str) -> Result<(), String> {
+    if text.is_empty() {
+        return Ok(());
+    }
+
+    // Try wtype first (Wayland)
+    let wtype_result = std::process::Command::new("wtype")
+        .arg(text)
+        .status();
+
+    if let Ok(status) = wtype_result {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    // Fall back to xdotool (X11)
+    let xdotool_result = std::process::Command::new("xdotool")
+        .args(["type", "--clearmodifiers", text])
+        .status();
+
+    if let Ok(status) = xdotool_result {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    Err("Failed to type text: neither wtype nor xdotool available".to_string())
 }
 
 #[tauri::command]
@@ -556,6 +688,8 @@ pub fn run() {
         sample_rate: Arc::new(Mutex::new(None)),
         stop_signal: Arc::new(Mutex::new(None)),
         api_key: Arc::new(Mutex::new(None)),
+        openrouter_api_key: Arc::new(Mutex::new(None)),
+        llm_prompt: Arc::new(Mutex::new(String::new())),
     };
 
     tauri::Builder::default()
@@ -568,6 +702,9 @@ pub fn run() {
             get_system_theme,
             get_focused_window,
             set_api_key,
+            set_openrouter_api_key,
+            set_llm_prompt,
+            process_with_llm,
             type_text,
         ])
         .setup(|app| {
