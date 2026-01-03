@@ -5,6 +5,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
 type Theme = "light" | "dark" | "system";
+type SttService = "deepgram" | "whisper";
 
 interface TranscriptionEvent {
   text: string;
@@ -14,6 +15,12 @@ interface TranscriptionEvent {
 interface LlmResponseEvent {
   text: string;
   is_error: boolean;
+}
+
+interface DownloadProgressEvent {
+  downloaded: number;
+  total: number;
+  percent: number;
 }
 
 // Icons
@@ -76,6 +83,15 @@ function App() {
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
   const [focusedApp, setFocusedApp] = useState<string | null>(null);
 
+  // STT service state
+  const [sttService, setSttService] = useState<SttService>(() =>
+    (localStorage.getItem("stt_service") as SttService) || "deepgram"
+  );
+  const [whisperModelExists, setWhisperModelExists] = useState<boolean | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [isWhisperProcessing, setIsWhisperProcessing] = useState(false);
+
   // LLM state
   const [llmPrompt, setLlmPrompt] = useState(() => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT);
   const [llmResponse, setLlmResponse] = useState("");
@@ -119,6 +135,61 @@ function App() {
   useEffect(() => {
     localStorage.setItem("type_output", typeOutput);
   }, [typeOutput]);
+
+  // Save STT service to localStorage and sync with backend
+  useEffect(() => {
+    localStorage.setItem("stt_service", sttService);
+    invoke("set_stt_service", { service: sttService });
+  }, [sttService]);
+
+  // Check if whisper model exists
+  useEffect(() => {
+    const checkModel = async () => {
+      try {
+        const exists = await invoke<boolean>("check_whisper_model");
+        setWhisperModelExists(exists);
+      } catch {
+        setWhisperModelExists(false);
+      }
+    };
+    checkModel();
+  }, []);
+
+  // Listen for download events
+  useEffect(() => {
+    const unlistenProgress = listen<DownloadProgressEvent>("download-progress", (event) => {
+      setDownloadProgress(event.payload.percent);
+    });
+
+    const unlistenComplete = listen<boolean>("download-complete", () => {
+      setIsDownloading(false);
+      setDownloadProgress(100);
+      setWhisperModelExists(true);
+    });
+
+    const unlistenError = listen<string>("download-error", (event) => {
+      setIsDownloading(false);
+      setDownloadProgress(0);
+      alert(`Download failed: ${event.payload}`);
+    });
+
+    return () => {
+      unlistenProgress.then((fn) => fn());
+      unlistenComplete.then((fn) => fn());
+      unlistenError.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for whisper processing events
+  useEffect(() => {
+    const unlisten = listen<boolean>("whisper-processing", (event) => {
+      setIsWhisperProcessing(event.payload);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Poll for focused window
   useEffect(() => {
@@ -318,10 +389,27 @@ function App() {
     }
   }, [waveformData, isPlaying, drawWaveform]);
 
+  // Download whisper model
+  const downloadWhisperModel = async () => {
+    setIsDownloading(true);
+    setDownloadProgress(0);
+    try {
+      await invoke("download_whisper_model");
+    } catch (err: any) {
+      setIsDownloading(false);
+      alert(`Could not start download: ${err}`);
+    }
+  };
+
   // Start recording
   const startRecording = async () => {
-    if (!apiKey.trim()) {
+    if (sttService === "deepgram" && !apiKey.trim()) {
       alert("Please enter your Deepgram API key first");
+      return;
+    }
+
+    if (sttService === "whisper" && !whisperModelExists) {
+      alert("Please download the Whisper model first");
       return;
     }
 
@@ -475,6 +563,48 @@ function App() {
         </button>
       </div>
 
+      <div className="stt-service-container">
+        <label className="section-label">STT Service</label>
+        <div className="stt-toggle">
+          <button
+            className={`toggle-btn ${sttService === "deepgram" ? "active" : ""}`}
+            onClick={() => setSttService("deepgram")}
+          >
+            Deepgram
+          </button>
+          <button
+            className={`toggle-btn ${sttService === "whisper" ? "active" : ""}`}
+            onClick={() => setSttService("whisper")}
+          >
+            Whisper (Local)
+          </button>
+        </div>
+
+        {sttService === "whisper" && (
+          <div className="whisper-status">
+            {whisperModelExists === null ? (
+              <span className="status-text">Checking model...</span>
+            ) : whisperModelExists ? (
+              <span className="status-text status-ready">Model ready</span>
+            ) : isDownloading ? (
+              <div className="download-progress">
+                <div className="progress-bar">
+                  <div
+                    className="progress-fill"
+                    style={{ width: `${downloadProgress}%` }}
+                  />
+                </div>
+                <span className="progress-text">{downloadProgress.toFixed(1)}%</span>
+              </div>
+            ) : (
+              <button className="download-btn" onClick={downloadWhisperModel}>
+                Download Whisper Model (~142MB)
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
       {audioUrl && !isRecording && (
         <div className="waveform-container">
           <audio ref={audioRef} src={audioUrl} />
@@ -502,13 +632,24 @@ function App() {
               <span>{finalText}</span>
               {interimText && <span className="interim-text">{finalText ? " " : ""}{interimText}</span>}
             </>
+          ) : isWhisperProcessing ? (
+            <div className="loading-indicator">
+              <div className="loading-dots">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+              <span className="loading-text">Processing with Whisper...</span>
+            </div>
           ) : (
             <span className="placeholder">
-              {isRecording ? "Listening..." : "Transcription will appear here..."}
+              {isRecording
+                ? (sttService === "whisper" ? "Recording... (transcription after stop)" : "Listening...")
+                : "Transcription will appear here..."}
             </span>
           )}
         </div>
-        {finalText && !isRecording && (
+        {finalText && !isRecording && !isWhisperProcessing && (
           <button className="copy-btn" onClick={handleCopy}>
             Copy
           </button>

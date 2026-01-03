@@ -637,3 +637,137 @@
 [data-theme="dark"] .toggle-btn.active:hover {
   background-color: #1eb3cc;
 }
+
+/* STT Service selector */
+.stt-service-container {
+  width: 100%;
+  max-width: 600px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.stt-toggle {
+  display: flex;
+  gap: 0;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid #e0e0e0;
+}
+
+.stt-toggle .toggle-btn:first-child {
+  border-right: 1px solid #e0e0e0;
+}
+
+[data-theme="dark"] .stt-toggle {
+  border-color: #444;
+}
+
+[data-theme="dark"] .stt-toggle .toggle-btn:first-child {
+  border-right-color: #444;
+}
+
+/* Whisper status */
+.whisper-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 0;
+}
+
+.status-text {
+  font-size: 12px;
+  color: #666;
+}
+
+.status-text.status-ready {
+  color: #22c55e;
+  font-weight: 500;
+}
+
+[data-theme="dark"] .status-text {
+  color: #999;
+}
+
+[data-theme="dark"] .status-text.status-ready {
+  color: #4ade80;
+}
+
+/* Download button */
+.download-btn {
+  padding: 8px 16px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  color: #ffffff;
+  background-color: #396cd8;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background-color 0.15s;
+  outline: none;
+}
+
+.download-btn:hover {
+  background-color: #345dc4;
+}
+
+.download-btn:active {
+  background-color: #2f54b5;
+}
+
+[data-theme="dark"] .download-btn {
+  background-color: #24c8db;
+  color: #0f0f0f;
+}
+
+[data-theme="dark"] .download-btn:hover {
+  background-color: #1eb3cc;
+}
+
+[data-theme="dark"] .download-btn:active {
+  background-color: #189eae;
+}
+
+/* Download progress */
+.download-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 300px;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 8px;
+  background-color: #e0e0e0;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background-color: #396cd8;
+  transition: width 0.2s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  min-width: 45px;
+  text-align: right;
+}
+
+[data-theme="dark"] .progress-bar {
+  background-color: #444;
+}
+
+[data-theme="dark"] .progress-fill {
+  background-color: #24c8db;
+}
+
+[data-theme="dark"] .progress-text {
+  color: #999;
+}

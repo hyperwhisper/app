@@ -8,6 +8,11 @@ in pkgs.mkShell {
     # nodejs # Optional, this is for if you have a js frontend
     bun
     rustc
+
+    # Required for whisper-rs bindgen
+    clang
+    llvmPackages.libclang
+    cmake
   ];
 
   buildInputs = with pkgs; [
@@ -44,5 +49,7 @@ in pkgs.mkShell {
 
   # Set ALSA library path for cpal
   LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [pkgs.alsa-lib]}";
-  # shellHook = "";
+
+  # Set LIBCLANG_PATH for whisper-rs bindgen
+  LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 }

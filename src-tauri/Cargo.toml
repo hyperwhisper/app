@@ -31,6 +31,7 @@ native-tls = "0.2"
 url = "2"
 zbus = "4"
 ureq = { version = "2", features = ["json"] }
+whisper-rs = "0.14"
 
 [dependencies.async-trait]
 version = "0.1"

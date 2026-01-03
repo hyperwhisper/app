@@ -2,16 +2,26 @@ use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use std::fs;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
+use whisper_rs::{FullParams, SamplingStrategy, WhisperContext, WhisperContextParameters};
 use zbus::interface;
+
+// STT service types
+#[derive(Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SttService {
+    Deepgram,
+    Whisper,
+}
 
 // Application state for audio recording
 pub struct AudioState {
@@ -23,6 +33,8 @@ pub struct AudioState {
     // LLM settings
     openrouter_api_key: Arc<Mutex<Option<String>>>,
     llm_prompt: Arc<Mutex<String>>,
+    // STT service selection
+    stt_service: Arc<Mutex<SttService>>,
 }
 
 // D-Bus service for external control
@@ -58,6 +70,143 @@ fn get_recordings_dir() -> Result<PathBuf, String> {
     }
 
     Ok(recordings_dir)
+}
+
+// Get the models directory, creating it if necessary
+fn get_models_dir() -> Result<PathBuf, String> {
+    let data_dir = dirs::data_local_dir()
+        .ok_or_else(|| "Could not find local data directory".to_string())?;
+    let models_dir = data_dir.join("hyperwhisper").join("models");
+
+    if !models_dir.exists() {
+        fs::create_dir_all(&models_dir)
+            .map_err(|e| format!("Failed to create models directory: {}", e))?;
+    }
+
+    Ok(models_dir)
+}
+
+// Get the path to the whisper base model
+fn get_whisper_model_path() -> Result<PathBuf, String> {
+    let models_dir = get_models_dir()?;
+    Ok(models_dir.join("ggml-base.bin"))
+}
+
+const WHISPER_MODEL_URL: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin";
+
+// Download progress event payload
+#[derive(Clone, serde::Serialize)]
+struct DownloadProgressEvent {
+    downloaded: u64,
+    total: u64,
+    percent: f64,
+}
+
+#[tauri::command]
+fn check_whisper_model() -> Result<bool, String> {
+    let model_path = get_whisper_model_path()?;
+    Ok(model_path.exists())
+}
+
+#[tauri::command]
+async fn download_whisper_model(app_handle: AppHandle) -> Result<(), String> {
+    let model_path = get_whisper_model_path()?;
+
+    // Check if model already exists
+    if model_path.exists() {
+        return Ok(());
+    }
+
+    // Download in a blocking thread
+    let app_handle_clone = app_handle.clone();
+    std::thread::spawn(move || {
+        let result = download_model_internal(&model_path, &app_handle_clone);
+
+        match result {
+            Ok(()) => {
+                let _ = app_handle_clone.emit("download-complete", true);
+            }
+            Err(e) => {
+                let _ = app_handle_clone.emit("download-error", e);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+fn download_model_internal(model_path: &PathBuf, app_handle: &AppHandle) -> Result<(), String> {
+    // Create a temporary file path
+    let temp_path = model_path.with_extension("bin.tmp");
+
+    // Make the request
+    let response = ureq::get(WHISPER_MODEL_URL)
+        .call()
+        .map_err(|e| format!("Failed to download model: {}", e))?;
+
+    // Get content length for progress
+    let total_size: u64 = response
+        .header("Content-Length")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(0);
+
+    // Create the file
+    let mut file = fs::File::create(&temp_path)
+        .map_err(|e| format!("Failed to create model file: {}", e))?;
+
+    // Read and write in chunks
+    let mut reader = response.into_reader();
+    let mut downloaded: u64 = 0;
+    let mut buffer = [0u8; 8192];
+    let mut last_progress_emit = std::time::Instant::now();
+
+    loop {
+        let bytes_read = reader
+            .read(&mut buffer)
+            .map_err(|e| format!("Failed to read download data: {}", e))?;
+
+        if bytes_read == 0 {
+            break;
+        }
+
+        file.write_all(&buffer[..bytes_read])
+            .map_err(|e| format!("Failed to write model file: {}", e))?;
+
+        downloaded += bytes_read as u64;
+
+        // Emit progress every 100ms to avoid flooding
+        if last_progress_emit.elapsed() >= Duration::from_millis(100) {
+            let percent = if total_size > 0 {
+                (downloaded as f64 / total_size as f64) * 100.0
+            } else {
+                0.0
+            };
+
+            let _ = app_handle.emit("download-progress", DownloadProgressEvent {
+                downloaded,
+                total: total_size,
+                percent,
+            });
+
+            last_progress_emit = std::time::Instant::now();
+        }
+    }
+
+    // Rename temp file to final path
+    fs::rename(&temp_path, model_path)
+        .map_err(|e| format!("Failed to finalize model file: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn set_stt_service(state: State<'_, AudioState>, service: SttService) {
+    *state.stt_service.lock().unwrap() = service;
+}
+
+#[tauri::command]
+fn get_stt_service(state: State<'_, AudioState>) -> SttService {
+    *state.stt_service.lock().unwrap()
 }
 
 // Helper function to get the default audio input device
@@ -115,6 +264,80 @@ fn samples_to_linear16(samples: &[f32]) -> Vec<u8> {
         bytes.extend_from_slice(&i16_sample.to_le_bytes());
     }
     bytes
+}
+
+// Resample audio to 16kHz (required by Whisper)
+fn resample_to_16khz(samples: &[f32], source_rate: u32) -> Vec<f32> {
+    if source_rate == 16000 {
+        return samples.to_vec();
+    }
+
+    let ratio = source_rate as f64 / 16000.0;
+    let new_len = (samples.len() as f64 / ratio).ceil() as usize;
+    let mut resampled = Vec::with_capacity(new_len);
+
+    for i in 0..new_len {
+        let src_idx = (i as f64 * ratio) as usize;
+        if src_idx < samples.len() {
+            resampled.push(samples[src_idx]);
+        }
+    }
+
+    resampled
+}
+
+// Transcribe audio using local Whisper model
+fn transcribe_with_whisper(samples: &[f32], sample_rate: u32) -> Result<String, String> {
+    let model_path = get_whisper_model_path()?;
+
+    if !model_path.exists() {
+        return Err("Whisper model not found. Please download it first.".to_string());
+    }
+
+    // Resample to 16kHz
+    let resampled = resample_to_16khz(samples, sample_rate);
+
+    // Create Whisper context
+    let ctx = WhisperContext::new_with_params(
+        model_path.to_str().ok_or("Invalid model path")?,
+        WhisperContextParameters::default(),
+    )
+    .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
+
+    // Create a state for inference
+    let mut state = ctx
+        .create_state()
+        .map_err(|e| format!("Failed to create Whisper state: {}", e))?;
+
+    // Set up parameters for transcription
+    let mut params = FullParams::new(SamplingStrategy::Greedy { best_of: 1 });
+    params.set_language(Some("en"));
+    params.set_print_special(false);
+    params.set_print_progress(false);
+    params.set_print_realtime(false);
+    params.set_print_timestamps(false);
+    params.set_suppress_blank(true);
+    params.set_suppress_nst(true);
+
+    // Run inference
+    state
+        .full(params, &resampled)
+        .map_err(|e| format!("Whisper inference failed: {}", e))?;
+
+    // Collect all segments
+    let num_segments = state.full_n_segments().map_err(|e| format!("Failed to get segments: {}", e))?;
+    let mut transcription = String::new();
+
+    for i in 0..num_segments {
+        if let Ok(segment_text) = state.full_get_segment_text(i) {
+            if !transcription.is_empty() {
+                transcription.push(' ');
+            }
+            transcription.push_str(&segment_text);
+        }
+    }
+
+    Ok(transcription.trim().to_string())
 }
 
 // Connect to Deepgram WebSocket
@@ -306,9 +529,16 @@ async fn start_recording(
         }
     }
 
-    // Get API key
-    let api_key = state.api_key.lock().unwrap().clone()
-        .ok_or_else(|| "API key not set".to_string())?;
+    // Get STT service
+    let stt_service = *state.stt_service.lock().unwrap();
+
+    // Get API key (only required for Deepgram)
+    let api_key = if stt_service == SttService::Deepgram {
+        Some(state.api_key.lock().unwrap().clone()
+            .ok_or_else(|| "Deepgram API key not set".to_string())?)
+    } else {
+        None
+    };
 
     // Clear previous recording
     *state.recorded_samples.lock().unwrap() = Vec::new();
@@ -336,89 +566,95 @@ async fn start_recording(
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     *state.stop_signal.lock().unwrap() = Some(stop_tx);
 
-    // Channel for sending audio chunks to WebSocket thread
+    // Channel for sending audio chunks to WebSocket thread (only used for Deepgram)
     let (audio_tx, audio_rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
-    // Spawn WebSocket thread for Deepgram
-    let app_handle_ws = app_handle.clone();
-    let is_recording_ws = is_recording_arc.clone();
-    thread::spawn(move || {
-        // Connect to Deepgram
-        let mut ws = match connect_to_deepgram(&api_key, sample_rate) {
-            Ok(ws) => ws,
-            Err(e) => {
-                eprintln!("Failed to connect to Deepgram: {}", e);
-                let _ = app_handle_ws.emit("transcription-error", e);
-                return;
-            }
-        };
-
-        // Set read timeout so we can check for stop signal and send audio
-        if let MaybeTlsStream::NativeTls(ref tls) = ws.get_ref() {
-            let _ = tls.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
-        }
-
-        loop {
-            // Check if we should stop
-            if !*is_recording_ws.lock().unwrap() {
-                let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
-                let _ = ws.close(None);
-                break;
-            }
-
-            // Send any pending audio data
-            while let Ok(samples) = audio_rx.try_recv() {
-                let pcm_data = samples_to_linear16(&samples);
-                if let Err(e) = ws.send(Message::Binary(pcm_data)) {
-                    eprintln!("Failed to send audio: {}", e);
+    // Spawn WebSocket thread for Deepgram (only if using Deepgram)
+    if stt_service == SttService::Deepgram {
+        let api_key = api_key.unwrap();
+        let app_handle_ws = app_handle.clone();
+        let is_recording_ws = is_recording_arc.clone();
+        thread::spawn(move || {
+            // Connect to Deepgram
+            let mut ws = match connect_to_deepgram(&api_key, sample_rate) {
+                Ok(ws) => ws,
+                Err(e) => {
+                    eprintln!("Failed to connect to Deepgram: {}", e);
+                    let _ = app_handle_ws.emit("transcription-error", e);
                     return;
                 }
+            };
+
+            // Set read timeout so we can check for stop signal and send audio
+            if let MaybeTlsStream::NativeTls(ref tls) = ws.get_ref() {
+                let _ = tls.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
             }
 
-            // Try to read messages from Deepgram (with timeout)
-            match ws.read() {
-                Ok(Message::Text(text)) => {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
-                            let transcript = json
-                                .get("channel")
-                                .and_then(|c| c.get("alternatives"))
-                                .and_then(|a| a.get(0))
-                                .and_then(|a| a.get("transcript"))
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
+            loop {
+                // Check if we should stop
+                if !*is_recording_ws.lock().unwrap() {
+                    let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
+                    let _ = ws.close(None);
+                    break;
+                }
 
-                            let is_final = json
-                                .get("is_final")
-                                .and_then(|f| f.as_bool())
-                                .unwrap_or(false);
+                // Send any pending audio data
+                while let Ok(samples) = audio_rx.try_recv() {
+                    let pcm_data = samples_to_linear16(&samples);
+                    if let Err(e) = ws.send(Message::Binary(pcm_data)) {
+                        eprintln!("Failed to send audio: {}", e);
+                        return;
+                    }
+                }
 
-                            if !transcript.is_empty() {
-                                let event = TranscriptionEvent {
-                                    text: transcript.to_string(),
-                                    is_final,
-                                };
-                                let _ = app_handle_ws.emit("transcription", event);
+                // Try to read messages from Deepgram (with timeout)
+                match ws.read() {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
+                                let transcript = json
+                                    .get("channel")
+                                    .and_then(|c| c.get("alternatives"))
+                                    .and_then(|a| a.get(0))
+                                    .and_then(|a| a.get("transcript"))
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("");
+
+                                let is_final = json
+                                    .get("is_final")
+                                    .and_then(|f| f.as_bool())
+                                    .unwrap_or(false);
+
+                                if !transcript.is_empty() {
+                                    let event = TranscriptionEvent {
+                                        text: transcript.to_string(),
+                                        is_final,
+                                    };
+                                    let _ = app_handle_ws.emit("transcription", event);
+                                }
                             }
                         }
                     }
+                    Ok(Message::Close(_)) => {
+                        break;
+                    }
+                    Err(tungstenite::Error::Io(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {
+                        // Timeout - continue loop
+                    }
+                    Err(e) => {
+                        eprintln!("WebSocket error: {}", e);
+                        break;
+                    }
+                    _ => {}
                 }
-                Ok(Message::Close(_)) => {
-                    break;
-                }
-                Err(tungstenite::Error::Io(ref e))
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {
-                    // Timeout - continue loop
-                }
-                Err(e) => {
-                    eprintln!("WebSocket error: {}", e);
-                    break;
-                }
-                _ => {}
             }
-        }
-    });
+        });
+    }
+
+    // Flag to determine if we should send audio to the WebSocket
+    let use_deepgram = stt_service == SttService::Deepgram;
 
     // Spawn audio recording thread
     thread::spawn(move || {
@@ -443,8 +679,10 @@ async fn start_recording(
                             }
                             // Store for WAV file
                             recorded_samples.lock().unwrap().extend_from_slice(&buffer);
-                            // Send to WebSocket thread
-                            let _ = audio_tx.send(buffer);
+                            // Send to WebSocket thread (only for Deepgram)
+                            if use_deepgram {
+                                let _ = audio_tx.send(buffer);
+                            }
                         }
                     },
                     move |err| {
@@ -471,7 +709,9 @@ async fn start_recording(
                                 buffer = mono_data;
                             }
                             recorded_samples.lock().unwrap().extend_from_slice(&buffer);
-                            let _ = audio_tx.send(buffer);
+                            if use_deepgram {
+                                let _ = audio_tx.send(buffer);
+                            }
                         }
                     },
                     move |err| {
@@ -498,7 +738,9 @@ async fn start_recording(
                                 buffer = mono_data;
                             }
                             recorded_samples.lock().unwrap().extend_from_slice(&buffer);
-                            let _ = audio_tx.send(buffer);
+                            if use_deepgram {
+                                let _ = audio_tx.send(buffer);
+                            }
                         }
                     },
                     move |err| {
@@ -533,13 +775,16 @@ async fn start_recording(
 }
 
 #[tauri::command]
-async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> {
+async fn stop_recording(state: State<'_, AudioState>, app_handle: AppHandle) -> Result<String, String> {
     {
         let is_recording = state.is_recording.lock().unwrap();
         if !*is_recording {
             return Err("Not recording".to_string());
         }
     }
+
+    // Get STT service before stopping
+    let stt_service = *state.stt_service.lock().unwrap();
 
     // Stop recording
     *state.is_recording.lock().unwrap() = false;
@@ -571,6 +816,35 @@ async fn stop_recording(state: State<'_, AudioState>) -> Result<String, String> 
 
     fs::write(&file_path, &wav_bytes)
         .map_err(|e| format!("Failed to save recording: {}", e))?;
+
+    // If using Whisper, run transcription now
+    if stt_service == SttService::Whisper {
+        let samples_clone = samples.clone();
+        let app_handle_clone = app_handle.clone();
+
+        // Run transcription in a thread to avoid blocking
+        thread::spawn(move || {
+            // Emit a processing event
+            let _ = app_handle_clone.emit("whisper-processing", true);
+
+            match transcribe_with_whisper(&samples_clone, sample_rate) {
+                Ok(text) => {
+                    if !text.is_empty() {
+                        let event = TranscriptionEvent {
+                            text,
+                            is_final: true,
+                        };
+                        let _ = app_handle_clone.emit("transcription", event);
+                    }
+                }
+                Err(e) => {
+                    let _ = app_handle_clone.emit("transcription-error", e);
+                }
+            }
+
+            let _ = app_handle_clone.emit("whisper-processing", false);
+        });
+    }
 
     // Encode as base64
     use base64::Engine;
@@ -690,6 +964,7 @@ pub fn run() {
         api_key: Arc::new(Mutex::new(None)),
         openrouter_api_key: Arc::new(Mutex::new(None)),
         llm_prompt: Arc::new(Mutex::new(String::new())),
+        stt_service: Arc::new(Mutex::new(SttService::Deepgram)),
     };
 
     tauri::Builder::default()
@@ -706,6 +981,10 @@ pub fn run() {
             set_llm_prompt,
             process_with_llm,
             type_text,
+            check_whisper_model,
+            download_whisper_model,
+            set_stt_service,
+            get_stt_service,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
