@@ -180,10 +180,45 @@ function App() {
     };
   }, []);
 
+  // Track if we need to process after Whisper completes
+  const pendingWhisperProcessingRef = useRef(false);
+
   // Listen for whisper processing events
   useEffect(() => {
     const unlisten = listen<boolean>("whisper-processing", (event) => {
       setIsWhisperProcessing(event.payload);
+
+      // When Whisper processing completes, handle typing and LLM
+      if (!event.payload && pendingWhisperProcessingRef.current) {
+        pendingWhisperProcessingRef.current = false;
+
+        // Small delay to ensure state is updated
+        setTimeout(async () => {
+          const textToType = finalTextRef.current;
+          if (textToType) {
+            // Type transcription if that's what user selected
+            if (localStorage.getItem("type_output") === "transcription") {
+              try {
+                await invoke("type_text", { text: textToType });
+              } catch (err) {
+                console.error("Failed to type text:", err);
+              }
+            }
+            // Process with LLM via Rust backend
+            const storedOpenRouterKey = localStorage.getItem("openrouter_api_key");
+            if (storedOpenRouterKey?.trim()) {
+              try {
+                await invoke("process_with_llm", {
+                  transcription: textToType,
+                  shouldType: localStorage.getItem("type_output") === "llm"
+                });
+              } catch (err) {
+                console.error("Failed to process with LLM:", err);
+              }
+            }
+          }
+        }, 100);
+      }
     });
 
     return () => {
@@ -437,31 +472,36 @@ function App() {
       setInterimText("");
       await generateWaveform(dataUrl);
 
-      // Wait briefly for any final transcription events, then process
-      setTimeout(async () => {
-        const textToType = finalTextRef.current;
-        if (textToType) {
-          // Type transcription if that's what user selected
-          if (typeOutput === "transcription") {
-            try {
-              await invoke("type_text", { text: textToType });
-            } catch (err) {
-              console.error("Failed to type text:", err);
+      // For Whisper mode, set flag to process when transcription completes
+      if (sttService === "whisper") {
+        pendingWhisperProcessingRef.current = true;
+      } else {
+        // For Deepgram, wait briefly for any final transcription events, then process
+        setTimeout(async () => {
+          const textToType = finalTextRef.current;
+          if (textToType) {
+            // Type transcription if that's what user selected
+            if (typeOutput === "transcription") {
+              try {
+                await invoke("type_text", { text: textToType });
+              } catch (err) {
+                console.error("Failed to type text:", err);
+              }
+            }
+            // Process with LLM via Rust backend (will type if typeOutput is "llm")
+            if (openRouterApiKey.trim()) {
+              try {
+                await invoke("process_with_llm", {
+                  transcription: textToType,
+                  shouldType: typeOutput === "llm"
+                });
+              } catch (err) {
+                console.error("Failed to process with LLM:", err);
+              }
             }
           }
-          // Process with LLM via Rust backend (will type if typeOutput is "llm")
-          if (openRouterApiKey.trim()) {
-            try {
-              await invoke("process_with_llm", {
-                transcription: textToType,
-                shouldType: typeOutput === "llm"
-              });
-            } catch (err) {
-              console.error("Failed to process with LLM:", err);
-            }
-          }
-        }
-      }, 200);
+        }, 200);
+      }
     } catch (err: any) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);

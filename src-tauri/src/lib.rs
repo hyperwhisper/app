@@ -491,7 +491,19 @@ fn type_text_internal(text: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    // Try wtype first (Wayland)
+    // Try ydotool first (works on both Wayland and X11 via uinput)
+    // Use --key-delay 0 for fastest typing
+    let ydotool_result = std::process::Command::new("ydotool")
+        .args(["type", "--key-delay=0", "--", text])
+        .status();
+
+    if let Ok(status) = ydotool_result {
+        if status.success() {
+            return Ok(());
+        }
+    }
+
+    // Try wtype (Wayland - requires compositor support)
     let wtype_result = std::process::Command::new("wtype")
         .arg(text)
         .status();
@@ -513,7 +525,7 @@ fn type_text_internal(text: &str) -> Result<(), String> {
         }
     }
 
-    Err("Failed to type text: neither wtype nor xdotool available".to_string())
+    Err("Failed to type text: ydotool, wtype, and xdotool all failed".to_string())
 }
 
 #[tauri::command]
@@ -883,33 +895,7 @@ fn get_system_theme() -> String {
 
 #[tauri::command]
 fn type_text(text: String) -> Result<(), String> {
-    if text.is_empty() {
-        return Ok(());
-    }
-
-    // Try wtype first (Wayland)
-    let wtype_result = std::process::Command::new("wtype")
-        .arg(&text)
-        .status();
-
-    if let Ok(status) = wtype_result {
-        if status.success() {
-            return Ok(());
-        }
-    }
-
-    // Fall back to xdotool (X11)
-    let xdotool_result = std::process::Command::new("xdotool")
-        .args(["type", "--clearmodifiers", &text])
-        .status();
-
-    if let Ok(status) = xdotool_result {
-        if status.success() {
-            return Ok(());
-        }
-    }
-
-    Err("Failed to type text: neither wtype nor xdotool available".to_string())
+    type_text_internal(&text)
 }
 
 #[tauri::command]
