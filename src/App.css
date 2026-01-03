@@ -638,6 +638,40 @@
   background-color: #1eb3cc;
 }
 
+/* Settings toggles */
+.settings-toggles {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #666;
+  cursor: pointer;
+  user-select: none;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #396cd8;
+  cursor: pointer;
+}
+
+[data-theme="dark"] .checkbox-label {
+  color: #999;
+}
+
+[data-theme="dark"] .checkbox-label input[type="checkbox"] {
+  accent-color: #24c8db;
+}
+
 /* STT Service selector */
 .stt-service-container {
   width: 100%;

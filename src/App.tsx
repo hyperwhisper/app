@@ -100,6 +100,10 @@ function App() {
   const [typeOutput, setTypeOutput] = useState<"transcription" | "llm">(() =>
     (localStorage.getItem("type_output") as "transcription" | "llm") || "transcription"
   );
+  const [llmEnabled, setLlmEnabled] = useState(() => localStorage.getItem("llm_enabled") !== "false");
+  const [realTimeTypingEnabled, setRealTimeTypingEnabled] = useState(() =>
+    localStorage.getItem("realtime_typing_enabled") !== "false"
+  );
 
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -135,6 +139,14 @@ function App() {
   useEffect(() => {
     localStorage.setItem("type_output", typeOutput);
   }, [typeOutput]);
+
+  useEffect(() => {
+    localStorage.setItem("llm_enabled", String(llmEnabled));
+  }, [llmEnabled]);
+
+  useEffect(() => {
+    localStorage.setItem("realtime_typing_enabled", String(realTimeTypingEnabled));
+  }, [realTimeTypingEnabled]);
 
   // Save STT service to localStorage and sync with backend
   useEffect(() => {
@@ -204,9 +216,10 @@ function App() {
                 console.error("Failed to type text:", err);
               }
             }
-            // Process with LLM via Rust backend
+            // Process with LLM via Rust backend (if enabled)
             const storedOpenRouterKey = localStorage.getItem("openrouter_api_key");
-            if (storedOpenRouterKey?.trim()) {
+            const isLlmEnabled = localStorage.getItem("llm_enabled") !== "false";
+            if (isLlmEnabled && storedOpenRouterKey?.trim()) {
               try {
                 await invoke("process_with_llm", {
                   transcription: textToType,
@@ -454,8 +467,8 @@ function App() {
       setAudioUrl(null);
       setAudioFilePath(null);
 
-      // Enable real-time typing for Deepgram when typeOutput is "transcription"
-      const shouldAutoType = sttService === "deepgram" && typeOutput === "transcription";
+      // Enable real-time typing for Deepgram when enabled and typeOutput is "transcription"
+      const shouldAutoType = sttService === "deepgram" && typeOutput === "transcription" && realTimeTypingEnabled;
       await invoke("set_auto_type_transcription", { enabled: shouldAutoType });
 
       await invoke("start_recording");
@@ -481,12 +494,19 @@ function App() {
         pendingWhisperProcessingRef.current = true;
       } else {
         // For Deepgram, wait briefly for any final transcription events, then process
-        // Note: If typeOutput is "transcription", text was already typed in real-time
         setTimeout(async () => {
           const textToType = finalTextRef.current;
           if (textToType) {
+            // Type transcription after stop if real-time typing was disabled
+            if (typeOutput === "transcription" && !realTimeTypingEnabled) {
+              try {
+                await invoke("type_text", { text: textToType });
+              } catch (err) {
+                console.error("Failed to type text:", err);
+              }
+            }
             // Process with LLM via Rust backend (will type if typeOutput is "llm")
-            if (openRouterApiKey.trim()) {
+            if (llmEnabled && openRouterApiKey.trim()) {
               try {
                 await invoke("process_with_llm", {
                   transcription: textToType,
@@ -598,6 +618,25 @@ function App() {
         >
           LLM Response
         </button>
+      </div>
+
+      <div className="settings-toggles">
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={realTimeTypingEnabled}
+            onChange={(e) => setRealTimeTypingEnabled(e.target.checked)}
+          />
+          Real-time typing
+        </label>
+        <label className="checkbox-label">
+          <input
+            type="checkbox"
+            checked={llmEnabled}
+            onChange={(e) => setLlmEnabled(e.target.checked)}
+          />
+          LLM processing
+        </label>
       </div>
 
       <div className="stt-service-container">
