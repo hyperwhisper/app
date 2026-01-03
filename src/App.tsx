@@ -454,6 +454,10 @@ function App() {
       setAudioUrl(null);
       setAudioFilePath(null);
 
+      // Enable real-time typing for Deepgram when typeOutput is "transcription"
+      const shouldAutoType = sttService === "deepgram" && typeOutput === "transcription";
+      await invoke("set_auto_type_transcription", { enabled: shouldAutoType });
+
       await invoke("start_recording");
       setIsRecording(true);
     } catch (err: any) {
@@ -477,17 +481,10 @@ function App() {
         pendingWhisperProcessingRef.current = true;
       } else {
         // For Deepgram, wait briefly for any final transcription events, then process
+        // Note: If typeOutput is "transcription", text was already typed in real-time
         setTimeout(async () => {
           const textToType = finalTextRef.current;
           if (textToType) {
-            // Type transcription if that's what user selected
-            if (typeOutput === "transcription") {
-              try {
-                await invoke("type_text", { text: textToType });
-              } catch (err) {
-                console.error("Failed to type text:", err);
-              }
-            }
             // Process with LLM via Rust backend (will type if typeOutput is "llm")
             if (openRouterApiKey.trim()) {
               try {

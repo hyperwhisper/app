@@ -35,6 +35,8 @@ pub struct AudioState {
     llm_prompt: Arc<Mutex<String>>,
     // STT service selection
     stt_service: Arc<Mutex<SttService>>,
+    // Real-time typing: type transcription as it streams in
+    auto_type_transcription: Arc<Mutex<bool>>,
 }
 
 // D-Bus service for external control
@@ -207,6 +209,11 @@ fn set_stt_service(state: State<'_, AudioState>, service: SttService) {
 #[tauri::command]
 fn get_stt_service(state: State<'_, AudioState>) -> SttService {
     *state.stt_service.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_auto_type_transcription(state: State<'_, AudioState>, enabled: bool) {
+    *state.auto_type_transcription.lock().unwrap() = enabled;
 }
 
 // Helper function to get the default audio input device
@@ -586,6 +593,7 @@ async fn start_recording(
         let api_key = api_key.unwrap();
         let app_handle_ws = app_handle.clone();
         let is_recording_ws = is_recording_arc.clone();
+        let auto_type = *state.auto_type_transcription.lock().unwrap();
         thread::spawn(move || {
             // Connect to Deepgram
             let mut ws = match connect_to_deepgram(&api_key, sample_rate) {
@@ -638,6 +646,13 @@ async fn start_recording(
                                     .unwrap_or(false);
 
                                 if !transcript.is_empty() {
+                                    // Type final transcriptions in real-time if enabled
+                                    if is_final && auto_type {
+                                        // Add a space before the text (except potentially first word)
+                                        let text_to_type = format!("{} ", transcript);
+                                        let _ = type_text_internal(&text_to_type);
+                                    }
+
                                     let event = TranscriptionEvent {
                                         text: transcript.to_string(),
                                         is_final,
@@ -951,6 +966,7 @@ pub fn run() {
         openrouter_api_key: Arc::new(Mutex::new(None)),
         llm_prompt: Arc::new(Mutex::new(String::new())),
         stt_service: Arc::new(Mutex::new(SttService::Deepgram)),
+        auto_type_transcription: Arc::new(Mutex::new(false)),
     };
 
     tauri::Builder::default()
@@ -971,6 +987,7 @@ pub fn run() {
             download_whisper_model,
             set_stt_service,
             get_stt_service,
+            set_auto_type_transcription,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
