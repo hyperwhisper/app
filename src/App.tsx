@@ -23,51 +23,7 @@ interface DownloadProgressEvent {
   percent: number;
 }
 
-// Icons
-const MicIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" />
-    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-    <line x1="12" x2="12" y1="19" y2="22" />
-  </svg>
-);
-
-const StopIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor">
-    <rect x="6" y="6" width="12" height="12" rx="1" />
-  </svg>
-);
-
-const PlayIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-    <polygon points="6,4 20,12 6,20" />
-  </svg>
-);
-
-const PauseIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-    <rect x="6" y="4" width="4" height="16" rx="1" />
-    <rect x="14" y="4" width="4" height="16" rx="1" />
-  </svg>
-);
-
-const MinimizeIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-    <rect x="1" y="5.5" width="10" height="1" />
-  </svg>
-);
-
-const MaximizeIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1">
-    <rect x="1.5" y="1.5" width="9" height="9" />
-  </svg>
-);
-
-const CloseIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
-    <path d="M1.5 1.5L10.5 10.5M10.5 1.5L1.5 10.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-  </svg>
-);
+type StatusState = "idle" | "loading" | "recording" | "processing" | "complete";
 
 const DEFAULT_PROMPT = "You are a helpful assistant. Process the following transcription and provide a refined response:";
 
@@ -76,12 +32,9 @@ function App() {
   const [interimText, setInterimText] = useState("");
   const [theme, setTheme] = useState<Theme>("system");
   const [isRecording, setIsRecording] = useState(false);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [audioFilePath, setAudioFilePath] = useState<string | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [waveformData, setWaveformData] = useState<number[]>([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
-  const [focusedApp, setFocusedApp] = useState<string | null>(null);
+  const [status, setStatus] = useState<StatusState>("idle");
 
   // STT service state
   const [sttService, setSttService] = useState<SttService>(() =>
@@ -105,10 +58,15 @@ function App() {
     localStorage.getItem("realtime_typing_enabled") !== "false"
   );
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // Settings panel visibility
+  const [showSettings, setShowSettings] = useState(false);
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
   const finalTextRef = useRef<string>("");
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const microphoneRef = useRef<MediaStream | null>(null);
 
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
@@ -199,6 +157,9 @@ function App() {
   useEffect(() => {
     const unlisten = listen<boolean>("whisper-processing", (event) => {
       setIsWhisperProcessing(event.payload);
+      if (event.payload) {
+        setStatus("processing");
+      }
 
       // When Whisper processing completes, handle typing and LLM
       if (!event.payload && pendingWhisperProcessingRef.current) {
@@ -230,6 +191,8 @@ function App() {
               }
             }
           }
+          setStatus("complete");
+          setTimeout(() => setStatus("idle"), 2000);
         }, 100);
       }
     });
@@ -237,23 +200,6 @@ function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, []);
-
-  // Poll for focused window
-  useEffect(() => {
-    const updateFocusedApp = async () => {
-      try {
-        const app = await invoke<string | null>("get_focused_window");
-        setFocusedApp(app);
-      } catch {
-        setFocusedApp(null);
-      }
-    };
-
-    updateFocusedApp();
-    const interval = setInterval(updateFocusedApp, 500);
-
-    return () => clearInterval(interval);
   }, []);
 
   // Listen for transcription events from backend
@@ -282,11 +228,14 @@ function App() {
       setIsProcessingLlm(event.payload);
       if (event.payload) {
         setLlmResponse("");
+        setStatus("processing");
       }
     });
 
     const unlistenResponse = listen<LlmResponseEvent>("llm-response", (event) => {
       setLlmResponse(event.payload.text);
+      setStatus("complete");
+      setTimeout(() => setStatus("idle"), 2000);
     });
 
     return () => {
@@ -334,108 +283,105 @@ function App() {
     };
   }, [theme]);
 
-  // Handle audio playback events
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    const handleEnded = () => setIsPlaying(false);
-    const handlePlay = () => setIsPlaying(true);
-    const handlePause = () => setIsPlaying(false);
-
-    audio.addEventListener("ended", handleEnded);
-    audio.addEventListener("play", handlePlay);
-    audio.addEventListener("pause", handlePause);
-
-    return () => {
-      audio.removeEventListener("ended", handleEnded);
-      audio.removeEventListener("play", handlePlay);
-      audio.removeEventListener("pause", handlePause);
-    };
-  }, [audioUrl]);
-
-  // Generate waveform data from audio URL
-  const generateWaveform = useCallback(async (url: string) => {
+  // Real-time waveform visualization during recording
+  const startRealTimeWaveform = useCallback(async () => {
     try {
-      const response = await fetch(url);
-      const arrayBuffer = await response.arrayBuffer();
-      const audioContext = new AudioContext();
-      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-      const channelData = audioBuffer.getChannelData(0);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      microphoneRef.current = stream;
 
-      const samples: number[] = [];
-      const step = Math.ceil(channelData.length / 200);
-      for (let i = 0; i < channelData.length; i += step) {
-        samples.push(Math.abs(channelData[i]));
-      }
-      setWaveformData(samples);
-      audioContext.close();
+      const audioContext = new AudioContext();
+      audioContextRef.current = audioContext;
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      analyserRef.current = analyser;
+
+      const source = audioContext.createMediaStreamSource(stream);
+      source.connect(analyser);
+
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+      const draw = () => {
+        const canvas = canvasRef.current;
+        if (!canvas || !analyserRef.current) return;
+
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+
+        analyserRef.current.getByteFrequencyData(dataArray);
+
+        const width = canvas.width;
+        const height = canvas.height;
+
+        ctx.clearRect(0, 0, width, height);
+
+        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
+        const barColor = isDark ? "#24c8db" : "#396cd8";
+
+        // Draw waveform as bars
+        const barWidth = 3;
+        const gap = 2;
+        const totalBars = Math.floor(width / (barWidth + gap));
+        const step = Math.floor(dataArray.length / totalBars);
+
+        for (let i = 0; i < totalBars; i++) {
+          const dataIndex = i * step;
+          const value = dataArray[dataIndex] || 0;
+          const barHeight = (value / 255) * height * 0.8;
+          const x = i * (barWidth + gap);
+          const y = (height - barHeight) / 2;
+
+          ctx.fillStyle = barColor;
+          ctx.fillRect(x, y, barWidth, barHeight);
+        }
+
+        if (isRecording) {
+          animationRef.current = requestAnimationFrame(draw);
+        }
+      };
+
+      draw();
     } catch (err) {
-      console.error("Error generating waveform:", err);
+      console.error("Error accessing microphone for waveform:", err);
+    }
+  }, [isRecording]);
+
+  const stopRealTimeWaveform = useCallback(() => {
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+    if (microphoneRef.current) {
+      microphoneRef.current.getTracks().forEach(track => track.stop());
+      microphoneRef.current = null;
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+    analyserRef.current = null;
+
+    // Clear canvas
+    const canvas = canvasRef.current;
+    if (canvas) {
+      const ctx = canvas.getContext("2d");
+      if (ctx) {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+      }
     }
   }, []);
 
-  // Draw waveform on canvas
-  const drawWaveform = useCallback((progress: number = 0) => {
-    const canvas = canvasRef.current;
-    if (!canvas || waveformData.length === 0) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const width = canvas.width;
-    const height = canvas.height;
-    const centerY = height / 2;
-    const barWidth = width / waveformData.length;
-    const maxAmplitude = Math.max(...waveformData, 0.1);
-
-    ctx.clearRect(0, 0, width, height);
-
-    const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-    const barColor = isDark ? "#24c8db" : "#396cd8";
-    const playedColor = isDark ? "#535bf2" : "#24c8db";
-
-    waveformData.forEach((amplitude, index) => {
-      const barHeight = (amplitude / maxAmplitude) * (height * 0.8);
-      const x = index * barWidth;
-      const isPlayed = index / waveformData.length < progress;
-
-      ctx.fillStyle = isPlayed ? playedColor : barColor;
-      ctx.fillRect(x, centerY - barHeight / 2, barWidth - 1, barHeight);
-    });
-  }, [waveformData]);
-
-  // Animation loop for playback progress
-  const animatePlayback = useCallback(() => {
-    const audio = audioRef.current;
-    if (!audio || !isPlaying) {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-        animationRef.current = null;
-      }
-      return;
-    }
-
-    const progress = audio.currentTime / audio.duration;
-    drawWaveform(progress);
-
-    animationRef.current = requestAnimationFrame(animatePlayback);
-  }, [isPlaying, drawWaveform]);
-
+  // Start/stop real-time waveform when recording state changes
   useEffect(() => {
-    if (isPlaying) {
-      animatePlayback();
-    } else if (audioUrl && audioRef.current) {
-      const progress = audioRef.current.currentTime / audioRef.current.duration;
-      drawWaveform(isNaN(progress) ? 0 : progress);
+    if (isRecording) {
+      startRealTimeWaveform();
+    } else {
+      stopRealTimeWaveform();
     }
-  }, [isPlaying, audioUrl, animatePlayback, drawWaveform]);
 
-  useEffect(() => {
-    if (waveformData.length > 0 && !isPlaying) {
-      drawWaveform(0);
-    }
-  }, [waveformData, isPlaying, drawWaveform]);
+    return () => {
+      stopRealTimeWaveform();
+    };
+  }, [isRecording, startRealTimeWaveform, stopRealTimeWaveform]);
 
   // Download whisper model
   const downloadWhisperModel = async () => {
@@ -464,8 +410,6 @@ function App() {
     try {
       setFinalText("");
       setInterimText("");
-      setAudioUrl(null);
-      setAudioFilePath(null);
 
       // Enable real-time typing for Deepgram when enabled and typeOutput is "transcription"
       const shouldAutoType = sttService === "deepgram" && typeOutput === "transcription" && realTimeTypingEnabled;
@@ -473,6 +417,7 @@ function App() {
 
       await invoke("start_recording");
       setIsRecording(true);
+      setStatus("recording");
     } catch (err: any) {
       alert(`Could not start recording: ${err}`);
     }
@@ -481,13 +426,9 @@ function App() {
   // Stop recording
   const stopRecording = async () => {
     try {
+      setStatus("processing");
       const response = await invoke<string>("stop_recording");
-      const { dataUrl, filePath } = JSON.parse(response);
-      setAudioUrl(dataUrl);
-      setAudioFilePath(filePath);
       setIsRecording(false);
-      setInterimText("");
-      await generateWaveform(dataUrl);
 
       // For Whisper mode, set flag to process when transcription completes
       if (sttService === "whisper") {
@@ -517,11 +458,29 @@ function App() {
               }
             }
           }
+          setStatus("complete");
+          setTimeout(() => setStatus("idle"), 2000);
         }, 200);
       }
     } catch (err: any) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);
+      setStatus("idle");
+    }
+  };
+
+  // Cancel recording
+  const cancelRecording = async () => {
+    if (!isRecording) return;
+
+    try {
+      await invoke("stop_recording");
+      setIsRecording(false);
+      setFinalText("");
+      setInterimText("");
+      setStatus("idle");
+    } catch (err: any) {
+      console.error("Error canceling recording:", err);
     }
   };
 
@@ -537,22 +496,6 @@ function App() {
   // Keep ref updated for D-Bus listener
   handleRecordRef.current = handleRecord;
 
-  // Toggle playback
-  const handlePlayback = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-
-    if (isPlaying) {
-      audio.pause();
-    } else {
-      audio.play();
-    }
-  };
-
-  function handleCopy() {
-    navigator.clipboard.writeText(finalText);
-  }
-
   function cycleTheme() {
     setTheme((prev) => {
       if (prev === "system") return "light";
@@ -561,239 +504,150 @@ function App() {
     });
   }
 
-  function getThemeLabel() {
-    if (theme === "system") return "System";
-    if (theme === "light") return "Light";
-    return "Dark";
-  }
-
-  const handleMinimize = () => getCurrentWindow().minimize();
-  const handleMaximize = () => getCurrentWindow().toggleMaximize();
-  const handleClose = () => getCurrentWindow().close();
   const handleDrag = () => getCurrentWindow().startDragging();
 
+  // Status indicator color
+  const getStatusColor = () => {
+    switch (status) {
+      case "loading": return "#f59e0b";
+      case "recording": return "#24c8db";
+      case "processing": return "#3b82f6";
+      case "complete": return "#22c55e";
+      default: return "#6b7280";
+    }
+  };
+
   return (
-    <main className="container">
-      <div className="titlebar" onMouseDown={handleDrag}>
-        <span className="titlebar-title">hyperwhisper</span>
-        <div className="titlebar-controls" onMouseDown={(e) => e.stopPropagation()}>
-          <button className="theme-toggle" onClick={cycleTheme}>
-            {getThemeLabel()}
-          </button>
-          <button className="titlebar-btn" onClick={handleMinimize}>
-            <MinimizeIcon />
-          </button>
-          <button className="titlebar-btn" onClick={handleMaximize}>
-            <MaximizeIcon />
-          </button>
-          <button className="titlebar-btn titlebar-btn-close" onClick={handleClose}>
-            <CloseIcon />
-          </button>
-        </div>
+    <main className="container" onContextMenu={(e) => { e.preventDefault(); setShowSettings(!showSettings); }}>
+      {/* Drag handle area */}
+      <div className="drag-area" onMouseDown={handleDrag} />
+
+      {/* Title */}
+      <div className="title-bar">
+        <span className="title-text">hyperwhisper</span>
       </div>
 
-      <button
-        className={`record-btn ${isRecording ? "recording" : ""}`}
-        onClick={handleRecord}
-      >
-        {isRecording ? <StopIcon /> : <MicIcon />}
-      </button>
+      {/* Waveform canvas */}
+      <canvas
+        ref={canvasRef}
+        width={600}
+        height={40}
+        className="waveform-canvas"
+      />
 
-      {focusedApp && (
-        <div className="focused-app">
-          {focusedApp}
-        </div>
-      )}
-
-      <div className="output-toggle">
+      {/* Controls */}
+      <div className="controls">
         <button
-          className={`toggle-btn ${typeOutput === "transcription" ? "active" : ""}`}
-          onClick={() => setTypeOutput("transcription")}
+          className={`record-btn ${isRecording ? "recording" : ""}`}
+          onClick={isRecording ? stopRecording : startRecording}
         >
-          Transcription
-        </button>
-        <button
-          className={`toggle-btn ${typeOutput === "llm" ? "active" : ""}`}
-          onClick={() => setTypeOutput("llm")}
-        >
-          LLM Response
-        </button>
-      </div>
-
-      <div className="settings-toggles">
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={realTimeTypingEnabled}
-            onChange={(e) => setRealTimeTypingEnabled(e.target.checked)}
-          />
-          Real-time typing
-        </label>
-        <label className="checkbox-label">
-          <input
-            type="checkbox"
-            checked={llmEnabled}
-            onChange={(e) => setLlmEnabled(e.target.checked)}
-          />
-          LLM processing
-        </label>
-      </div>
-
-      <div className="stt-service-container">
-        <label className="section-label">STT Service</label>
-        <div className="stt-toggle">
-          <button
-            className={`toggle-btn ${sttService === "deepgram" ? "active" : ""}`}
-            onClick={() => setSttService("deepgram")}
-          >
-            Deepgram
-          </button>
-          <button
-            className={`toggle-btn ${sttService === "whisper" ? "active" : ""}`}
-            onClick={() => setSttService("whisper")}
-          >
-            Whisper (Local)
-          </button>
-        </div>
-
-        {sttService === "whisper" && (
-          <div className="whisper-status">
-            {whisperModelExists === null ? (
-              <span className="status-text">Checking model...</span>
-            ) : whisperModelExists ? (
-              <span className="status-text status-ready">Model ready</span>
-            ) : isDownloading ? (
-              <div className="download-progress">
-                <div className="progress-bar">
-                  <div
-                    className="progress-fill"
-                    style={{ width: `${downloadProgress}%` }}
-                  />
-                </div>
-                <span className="progress-text">{downloadProgress.toFixed(1)}%</span>
-              </div>
+          <div className="record-icon">
+            {isRecording ? (
+              <div className="stop-icon" />
             ) : (
-              <button className="download-btn" onClick={downloadWhisperModel}>
-                Download Whisper Model (~142MB)
-              </button>
+              <div className="mic-icon">
+                <div className="mic-body" />
+                <div className="mic-stand" />
+              </div>
             )}
           </div>
-        )}
+        </button>
       </div>
 
-      {audioUrl && !isRecording && (
-        <div className="waveform-container">
-          <audio ref={audioRef} src={audioUrl} />
-          <div className="waveform-controls">
-            <canvas
-              ref={canvasRef}
-              width={400}
-              height={60}
-              className="waveform-canvas"
+      {/* Settings panel - accessible via right-click */}
+      {showSettings && !isRecording && (
+        <div className="settings-panel">
+          <div className="settings-section">
+            <label>STT Service</label>
+            <div className="toggle-group">
+              <button
+                className={`toggle-btn ${sttService === "deepgram" ? "active" : ""}`}
+                onClick={() => setSttService("deepgram")}
+              >
+                Deepgram
+              </button>
+              <button
+                className={`toggle-btn ${sttService === "whisper" ? "active" : ""}`}
+                onClick={() => setSttService("whisper")}
+              >
+                Whisper
+              </button>
+            </div>
+          </div>
+
+          {sttService === "whisper" && (
+            <div className="settings-section">
+              {whisperModelExists === null ? (
+                <span>Checking model...</span>
+              ) : whisperModelExists ? (
+                <span className="status-ready">Model ready</span>
+              ) : isDownloading ? (
+                <div className="download-progress">
+                  <div className="progress-bar">
+                    <div className="progress-fill" style={{ width: `${downloadProgress}%` }} />
+                  </div>
+                  <span>{downloadProgress.toFixed(1)}%</span>
+                </div>
+              ) : (
+                <button className="download-btn" onClick={downloadWhisperModel}>
+                  Download Model
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="settings-section">
+            <label>Deepgram API Key</label>
+            <input
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder="Enter API key"
+              className="input-field"
             />
-            <button className="playback-btn" onClick={handlePlayback}>
-              {isPlaying ? <PauseIcon /> : <PlayIcon />}
+          </div>
+
+          <div className="settings-section">
+            <label>OpenRouter API Key</label>
+            <input
+              type="password"
+              value={openRouterApiKey}
+              onChange={(e) => setOpenRouterApiKey(e.target.value)}
+              placeholder="Enter API key"
+              className="input-field"
+            />
+          </div>
+
+          <div className="settings-section">
+            <label>Theme</label>
+            <button className="theme-btn" onClick={cycleTheme}>
+              {theme === "system" ? "System" : theme === "light" ? "Light" : "Dark"}
             </button>
           </div>
-          {audioFilePath && (
-            <div className="file-path">{audioFilePath}</div>
-          )}
+
+          <div className="settings-section">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={realTimeTypingEnabled}
+                onChange={(e) => setRealTimeTypingEnabled(e.target.checked)}
+              />
+              Real-time typing
+            </label>
+          </div>
+
+          <div className="settings-section">
+            <label className="checkbox-label">
+              <input
+                type="checkbox"
+                checked={llmEnabled}
+                onChange={(e) => setLlmEnabled(e.target.checked)}
+              />
+              LLM processing
+            </label>
+          </div>
         </div>
       )}
-
-      <div className="text-box-container">
-        <div className="text-box" spellCheck={false}>
-          {finalText || interimText ? (
-            <>
-              <span>{finalText}</span>
-              {interimText && <span className="interim-text">{finalText ? " " : ""}{interimText}</span>}
-            </>
-          ) : isWhisperProcessing ? (
-            <div className="loading-indicator">
-              <div className="loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-              <span className="loading-text">Processing with Whisper...</span>
-            </div>
-          ) : (
-            <span className="placeholder">
-              {isRecording
-                ? (sttService === "whisper" ? "Recording... (transcription after stop)" : "Listening...")
-                : "Transcription will appear here..."}
-            </span>
-          )}
-        </div>
-        {finalText && !isRecording && !isWhisperProcessing && (
-          <button className="copy-btn" onClick={handleCopy}>
-            Copy
-          </button>
-        )}
-      </div>
-
-      <div className="text-box-container">
-        <label className="section-label">LLM Response</label>
-        <div className="text-box llm-response-box" spellCheck={false}>
-          {isProcessingLlm ? (
-            <div className="loading-indicator">
-              <div className="loading-dots">
-                <span></span>
-                <span></span>
-                <span></span>
-              </div>
-              <span className="loading-text">Processing with LLM...</span>
-            </div>
-          ) : llmResponse ? (
-            <span>{llmResponse}</span>
-          ) : (
-            <span className="placeholder">
-              LLM response will appear here...
-            </span>
-          )}
-        </div>
-        {llmResponse && !isProcessingLlm && (
-          <button className="copy-btn" onClick={() => navigator.clipboard.writeText(llmResponse)}>
-            Copy
-          </button>
-        )}
-      </div>
-
-      <div className="prompt-container">
-        <label htmlFor="llm-prompt">LLM Prompt</label>
-        <textarea
-          id="llm-prompt"
-          value={llmPrompt}
-          onChange={(e) => setLlmPrompt(e.target.value)}
-          placeholder="Enter your custom prompt..."
-          className="prompt-input"
-          rows={3}
-        />
-      </div>
-
-      <div className="api-key-container">
-        <label htmlFor="api-key">Deepgram API Key</label>
-        <input
-          id="api-key"
-          type="password"
-          value={apiKey}
-          onChange={(e) => setApiKey(e.target.value)}
-          placeholder="Enter your Deepgram API key"
-          className="api-key-input"
-        />
-      </div>
-
-      <div className="api-key-container">
-        <label htmlFor="openrouter-api-key">OpenRouter API Key</label>
-        <input
-          id="openrouter-api-key"
-          type="password"
-          value={openRouterApiKey}
-          onChange={(e) => setOpenRouterApiKey(e.target.value)}
-          placeholder="Enter your OpenRouter API key"
-          className="api-key-input"
-        />
-      </div>
     </main>
   );
 }
