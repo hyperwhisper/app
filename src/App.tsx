@@ -23,18 +23,13 @@ interface DownloadProgressEvent {
   percent: number;
 }
 
-type StatusState = "idle" | "loading" | "recording" | "processing" | "complete";
-
 const DEFAULT_PROMPT = "You are a helpful assistant. Process the following transcription and provide a refined response:";
 
 function App() {
   const [finalText, setFinalText] = useState("");
-  const [interimText, setInterimText] = useState("");
   const [theme, setTheme] = useState<Theme>("system");
   const [isRecording, setIsRecording] = useState(false);
-  const [waveformData, setWaveformData] = useState<number[]>([]);
   const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
-  const [status, setStatus] = useState<StatusState>("idle");
 
   // STT service state
   const [sttService, setSttService] = useState<SttService>(() =>
@@ -43,14 +38,11 @@ function App() {
   const [whisperModelExists, setWhisperModelExists] = useState<boolean | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
-  const [isWhisperProcessing, setIsWhisperProcessing] = useState(false);
 
   // LLM state
-  const [llmPrompt, setLlmPrompt] = useState(() => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT);
-  const [llmResponse, setLlmResponse] = useState("");
-  const [isProcessingLlm, setIsProcessingLlm] = useState(false);
+  const [llmPrompt] = useState(() => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT);
   const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("openrouter_api_key") || "");
-  const [typeOutput, setTypeOutput] = useState<"transcription" | "llm">(() =>
+  const [typeOutput] = useState<"transcription" | "llm">(() =>
     (localStorage.getItem("type_output") as "transcription" | "llm") || "transcription"
   );
   const [llmEnabled, setLlmEnabled] = useState(() => localStorage.getItem("llm_enabled") !== "false");
@@ -156,11 +148,6 @@ function App() {
   // Listen for whisper processing events
   useEffect(() => {
     const unlisten = listen<boolean>("whisper-processing", (event) => {
-      setIsWhisperProcessing(event.payload);
-      if (event.payload) {
-        setStatus("processing");
-      }
-
       // When Whisper processing completes, handle typing and LLM
       if (!event.payload && pendingWhisperProcessingRef.current) {
         pendingWhisperProcessingRef.current = false;
@@ -191,8 +178,6 @@ function App() {
               }
             }
           }
-          setStatus("complete");
-          setTimeout(() => setStatus("idle"), 2000);
         }, 100);
       }
     });
@@ -207,13 +192,8 @@ function App() {
     const unlisten = listen<TranscriptionEvent>("transcription", (event) => {
       const { text, is_final } = event.payload;
 
-      if (is_final) {
-        if (text) {
-          setFinalText((prev) => prev + (prev ? " " : "") + text);
-        }
-        setInterimText("");
-      } else {
-        setInterimText(text);
+      if (is_final && text) {
+        setFinalText((prev) => prev + (prev ? " " : "") + text);
       }
     });
 
@@ -224,22 +204,11 @@ function App() {
 
   // Listen for LLM events from backend
   useEffect(() => {
-    const unlistenProcessing = listen<boolean>("llm-processing", (event) => {
-      setIsProcessingLlm(event.payload);
-      if (event.payload) {
-        setLlmResponse("");
-        setStatus("processing");
-      }
-    });
-
-    const unlistenResponse = listen<LlmResponseEvent>("llm-response", (event) => {
-      setLlmResponse(event.payload.text);
-      setStatus("complete");
-      setTimeout(() => setStatus("idle"), 2000);
+    const unlistenResponse = listen<LlmResponseEvent>("llm-response", () => {
+      // LLM processing complete
     });
 
     return () => {
-      unlistenProcessing.then((fn) => fn());
       unlistenResponse.then((fn) => fn());
     };
   }, []);
@@ -409,7 +378,6 @@ function App() {
 
     try {
       setFinalText("");
-      setInterimText("");
 
       // Enable real-time typing for Deepgram when enabled and typeOutput is "transcription"
       const shouldAutoType = sttService === "deepgram" && typeOutput === "transcription" && realTimeTypingEnabled;
@@ -417,7 +385,6 @@ function App() {
 
       await invoke("start_recording");
       setIsRecording(true);
-      setStatus("recording");
     } catch (err: any) {
       alert(`Could not start recording: ${err}`);
     }
@@ -426,8 +393,7 @@ function App() {
   // Stop recording
   const stopRecording = async () => {
     try {
-      setStatus("processing");
-      const response = await invoke<string>("stop_recording");
+      await invoke<string>("stop_recording");
       setIsRecording(false);
 
       // For Whisper mode, set flag to process when transcription completes
@@ -458,29 +424,11 @@ function App() {
               }
             }
           }
-          setStatus("complete");
-          setTimeout(() => setStatus("idle"), 2000);
         }, 200);
       }
     } catch (err: any) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);
-      setStatus("idle");
-    }
-  };
-
-  // Cancel recording
-  const cancelRecording = async () => {
-    if (!isRecording) return;
-
-    try {
-      await invoke("stop_recording");
-      setIsRecording(false);
-      setFinalText("");
-      setInterimText("");
-      setStatus("idle");
-    } catch (err: any) {
-      console.error("Error canceling recording:", err);
     }
   };
 
@@ -505,17 +453,6 @@ function App() {
   }
 
   const handleDrag = () => getCurrentWindow().startDragging();
-
-  // Status indicator color
-  const getStatusColor = () => {
-    switch (status) {
-      case "loading": return "#f59e0b";
-      case "recording": return "#24c8db";
-      case "processing": return "#3b82f6";
-      case "complete": return "#22c55e";
-      default: return "#6b7280";
-    }
-  };
 
   return (
     <main className="container" onContextMenu={(e) => { e.preventDefault(); setShowSettings(!showSettings); }}>
