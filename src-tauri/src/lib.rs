@@ -219,8 +219,78 @@ fn set_auto_type_transcription(state: State<'_, AudioState>, enabled: bool) {
 // Helper function to get the default audio input device
 fn get_input_device() -> Result<Device, String> {
     let host = cpal::default_host();
-    host.default_input_device()
-        .ok_or_else(|| "No audio input device found".to_string())
+
+    // Log available input devices for debugging
+    eprintln!("Available audio hosts: {:?}", cpal::available_hosts());
+    eprintln!("Using host: {:?}", host.id());
+
+    // On Linux with PipeWire, prefer the "pipewire" device over "default"
+    // The "default" ALSA device can crash GNOME when Bluetooth audio is active
+    if let Ok(devices) = host.input_devices() {
+        let devices: Vec<_> = devices.collect();
+
+        for device in &devices {
+            if let Ok(name) = device.name() {
+                eprintln!("  Available input device: {}", name);
+            }
+        }
+
+        // Try to find "pipewire" device first - it handles Bluetooth better
+        for device in devices {
+            if let Ok(name) = device.name() {
+                if name == "pipewire" {
+                    eprintln!("Selected input device: {} (preferred for Bluetooth compatibility)", name);
+                    return Ok(device);
+                }
+            }
+        }
+    }
+
+    // Fall back to default device
+    let device = host.default_input_device()
+        .ok_or_else(|| "No audio input device found".to_string())?;
+
+    if let Ok(name) = device.name() {
+        eprintln!("Selected default input device: {}", name);
+    }
+
+    Ok(device)
+}
+
+// Get a safe stream config that works with Bluetooth devices
+// Bluetooth audio on Linux (especially with PipeWire) can crash GNOME when using
+// certain buffer sizes or sample rates. This function tries to find a safer config.
+fn get_safe_input_config(device: &Device) -> Result<SupportedStreamConfig, String> {
+    // First, try to get supported configs and find one that's known to work well
+    if let Ok(configs) = device.supported_input_configs() {
+        let configs: Vec<_> = configs.collect();
+
+        // Prefer 48000 Hz or 44100 Hz with F32 format - these are most compatible
+        let preferred_rates = [48000u32, 44100, 16000, 32000, 96000];
+
+        for rate in preferred_rates {
+            for config in &configs {
+                if config.min_sample_rate().0 <= rate && config.max_sample_rate().0 >= rate {
+                    if config.sample_format() == SampleFormat::F32 {
+                        return Ok(config.clone().with_sample_rate(cpal::SampleRate(rate)));
+                    }
+                }
+            }
+            // If F32 not available at this rate, try I16
+            for config in &configs {
+                if config.min_sample_rate().0 <= rate && config.max_sample_rate().0 >= rate {
+                    if config.sample_format() == SampleFormat::I16 {
+                        return Ok(config.clone().with_sample_rate(cpal::SampleRate(rate)));
+                    }
+                }
+            }
+        }
+    }
+
+    // Fall back to default config if no preferred config found
+    device
+        .default_input_config()
+        .map_err(|e| format!("Failed to get input config: {}", e))
 }
 
 // Convert audio data to WAV format bytes
@@ -562,15 +632,23 @@ async fn start_recording(
     // Clear previous recording
     *state.recorded_samples.lock().unwrap() = Vec::new();
 
-    let device = get_input_device()?;
-    let config = device
-        .default_input_config()
-        .map_err(|e| format!("Failed to get default input config: {}", e))?;
+    // Get audio device info in a blocking thread to avoid interfering with GTK main loop
+    // This is critical for Bluetooth devices on PipeWire which can crash GNOME
+    let (device, config) = tokio::task::spawn_blocking(|| {
+        let device = get_input_device()?;
+        let config = get_safe_input_config(&device)?;
+        Ok::<_, String>((device, config))
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+    .map_err(|e: String| e)?;
 
     let sample_format = config.sample_format();
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
-    let stream_config: SupportedStreamConfig = config.into();
+
+    // Use default buffer size - fixed sizes can cause issues with Bluetooth on PipeWire
+    let stream_config: cpal::StreamConfig = config.into();
 
     // Store sample rate
     *state.sample_rate.lock().unwrap() = Some(sample_rate);
@@ -691,7 +769,7 @@ async fn start_recording(
                 let recorded_samples = recorded_samples_arc.clone();
                 let audio_tx = audio_tx.clone();
                 device.build_input_stream(
-                    &stream_config.clone().into(),
+                    &stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         if *is_recording.lock().unwrap() {
                             let mut buffer = data.to_vec();
@@ -723,7 +801,7 @@ async fn start_recording(
                 let recorded_samples = recorded_samples_arc.clone();
                 let audio_tx = audio_tx.clone();
                 device.build_input_stream(
-                    &stream_config.clone().into(),
+                    &stream_config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         if *is_recording.lock().unwrap() {
                             let mut buffer: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
@@ -752,7 +830,7 @@ async fn start_recording(
                 let recorded_samples = recorded_samples_arc.clone();
                 let audio_tx = audio_tx.clone();
                 device.build_input_stream(
-                    &stream_config.clone().into(),
+                    &stream_config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
                         if *is_recording.lock().unwrap() {
                             let mut buffer: Vec<f32> = data.iter().map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0).collect();

@@ -17,6 +17,7 @@ in pkgs.mkShell {
     # For typing text (Wayland/X11)
     wtype      # Wayland (requires compositor support)
     ydotool    # Works on both via uinput
+    nodejs-slim
   ];
 
   buildInputs = with pkgs; [
