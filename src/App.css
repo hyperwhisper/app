@@ -62,6 +62,53 @@ body {
   letter-spacing: 0.5px;
 }
 
+/* Device selector */
+.device-selector {
+  margin-bottom: 8px;
+  width: 100%;
+  max-width: 280px;
+}
+
+.device-dropdown {
+  width: 100%;
+  padding: 4px 24px 4px 8px;
+  font-size: 11px;
+  font-family: inherit;
+  color: #888;
+  background-color: transparent;
+  border: 1px solid #333;
+  border-radius: 4px;
+  outline: none;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 6px center;
+  transition: border-color 0.15s ease, color 0.15s ease;
+  text-overflow: ellipsis;
+}
+
+.device-dropdown:hover:not(:disabled) {
+  border-color: #555;
+  color: #aaa;
+}
+
+.device-dropdown:focus {
+  border-color: #24c8db;
+  color: #fdfdfd;
+}
+
+.device-dropdown:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.device-dropdown option {
+  background-color: #1a1a1a;
+  color: #fdfdfd;
+  padding: 4px;
+}
+
 /* Waveform canvas */
 .waveform-canvas {
   width: 600px;
@@ -263,6 +310,34 @@ body {
   color: #555;
 }
 
+.select-field {
+  width: 100%;
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: inherit;
+  color: #fdfdfd;
+  background-color: #0d0d0d;
+  border: 1px solid #333;
+  border-radius: 6px;
+  outline: none;
+  transition: border-color 0.15s ease;
+  cursor: pointer;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 30px;
+}
+
+.select-field:focus {
+  border-color: #24c8db;
+}
+
+.select-field option {
+  background-color: #1a1a1a;
+  color: #fdfdfd;
+}
+
 .theme-btn {
   width: 100%;
   padding: 8px 12px;
@@ -362,6 +437,27 @@ body {
   color: #999;
 }
 
+[data-theme="light"] .device-dropdown {
+  color: #888;
+  border-color: #ddd;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+}
+
+[data-theme="light"] .device-dropdown:hover:not(:disabled) {
+  border-color: #bbb;
+  color: #666;
+}
+
+[data-theme="light"] .device-dropdown:focus {
+  border-color: #396cd8;
+  color: #0f0f0f;
+}
+
+[data-theme="light"] .device-dropdown option {
+  background-color: #ffffff;
+  color: #0f0f0f;
+}
+
 [data-theme="light"] .settings-panel {
   background-color: #f6f6f6;
   border-color: #e0e0e0;
@@ -401,6 +497,22 @@ body {
 
 [data-theme="light"] .input-field::placeholder {
   color: #999;
+}
+
+[data-theme="light"] .select-field {
+  color: #0f0f0f;
+  background-color: #ffffff;
+  border-color: #e0e0e0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+}
+
+[data-theme="light"] .select-field:focus {
+  border-color: #396cd8;
+}
+
+[data-theme="light"] .select-field option {
+  background-color: #ffffff;
+  color: #0f0f0f;
 }
 
 [data-theme="light"] .theme-btn {

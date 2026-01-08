@@ -23,6 +23,12 @@ interface DownloadProgressEvent {
   percent: number;
 }
 
+interface WpDevice {
+  id: number;
+  name: string;
+  is_default: boolean;
+}
+
 const DEFAULT_PROMPT = "You are a helpful assistant. Process the following transcription and provide a refined response:";
 
 function App() {
@@ -38,6 +44,13 @@ function App() {
   const [whisperModelExists, setWhisperModelExists] = useState<boolean | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState(0);
+
+  // Audio device state
+  const [audioDevices, setAudioDevices] = useState<WpDevice[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(() => {
+    const stored = localStorage.getItem("selected_audio_device_id");
+    return stored ? parseInt(stored, 10) : null;
+  });
 
   // LLM state
   const [llmPrompt] = useState(() => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT);
@@ -116,6 +129,29 @@ function App() {
     };
     checkModel();
   }, []);
+
+  // Load audio devices
+  useEffect(() => {
+    const loadDevices = async () => {
+      try {
+        const devices = await invoke<WpDevice[]>("list_audio_devices");
+        setAudioDevices(devices);
+      } catch (err) {
+        console.error("Failed to load audio devices:", err);
+      }
+    };
+    loadDevices();
+  }, []);
+
+  // Save selected device to localStorage and sync with backend
+  useEffect(() => {
+    if (selectedDeviceId !== null) {
+      localStorage.setItem("selected_audio_device_id", String(selectedDeviceId));
+    } else {
+      localStorage.removeItem("selected_audio_device_id");
+    }
+    invoke("set_selected_device", { deviceId: selectedDeviceId });
+  }, [selectedDeviceId]);
 
   // Listen for download events
   useEffect(() => {
@@ -464,6 +500,23 @@ function App() {
         <span className="title-text">hyperwhisper</span>
       </div>
 
+      {/* Audio device selector */}
+      <div className="device-selector">
+        <select
+          className="device-dropdown"
+          value={selectedDeviceId ?? ""}
+          onChange={(e) => setSelectedDeviceId(e.target.value ? parseInt(e.target.value, 10) : null)}
+          disabled={isRecording}
+        >
+          <option value="">Auto</option>
+          {audioDevices.map((device) => (
+            <option key={device.id} value={device.id}>
+              {device.name}{device.is_default ? " *" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
+
       {/* Waveform canvas */}
       <canvas
         ref={canvasRef}
@@ -532,6 +585,22 @@ function App() {
               )}
             </div>
           )}
+
+          <div className="settings-section">
+            <label>Audio Device</label>
+            <select
+              className="select-field"
+              value={selectedDeviceId ?? ""}
+              onChange={(e) => setSelectedDeviceId(e.target.value ? parseInt(e.target.value, 10) : null)}
+            >
+              <option value="">Auto-select</option>
+              {audioDevices.map((device) => (
+                <option key={device.id} value={device.id}>
+                  {device.name}{device.is_default ? " (default)" : ""}
+                </option>
+              ))}
+            </select>
+          </div>
 
           <div className="settings-section">
             <label>Deepgram API Key</label>

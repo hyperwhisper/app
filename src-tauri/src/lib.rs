@@ -23,6 +23,7 @@ pub enum SttService {
     Whisper,
 }
 
+
 // Application state for audio recording
 pub struct AudioState {
     is_recording: Arc<Mutex<bool>>,
@@ -37,6 +38,8 @@ pub struct AudioState {
     stt_service: Arc<Mutex<SttService>>,
     // Real-time typing: type transcription as it streams in
     auto_type_transcription: Arc<Mutex<bool>>,
+    // Selected audio input device ID from WirePlumber (None = auto-select)
+    selected_device_id: Arc<Mutex<Option<u32>>>,
 }
 
 // D-Bus service for external control
@@ -216,7 +219,108 @@ fn set_auto_type_transcription(state: State<'_, AudioState>, enabled: bool) {
     *state.auto_type_transcription.lock().unwrap() = enabled;
 }
 
-// Helper function to get the default audio input device
+// WirePlumber device info with ID for selection
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct WpDevice {
+    pub id: u32,
+    pub name: String,
+    pub is_default: bool,
+}
+
+#[tauri::command]
+fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
+    // Use wpctl to get WirePlumber audio sources (input devices)
+    let output = std::process::Command::new("wpctl")
+        .args(["status"])
+        .output()
+        .map_err(|e| format!("Failed to run wpctl: {}", e))?;
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    let mut devices = Vec::new();
+    let mut in_audio_section = false;
+    let mut in_sources_section = false;
+
+    for line in status.lines() {
+        // Track when we enter/exit the Audio section
+        if line.starts_with("Audio") {
+            in_audio_section = true;
+            continue;
+        }
+        if line.starts_with("Video") || line.starts_with("Settings") {
+            in_audio_section = false;
+            in_sources_section = false;
+            continue;
+        }
+
+        if !in_audio_section {
+            continue;
+        }
+
+        // Look for the Sources section under Audio
+        if line.contains("├─ Sources:") || line.contains("└─ Sources:") {
+            in_sources_section = true;
+            continue;
+        }
+
+        // Exit sources section when we hit another section (Filters, Streams, etc.)
+        if in_sources_section && (line.contains("├─") || line.contains("└─")) {
+            in_sources_section = false;
+            continue;
+        }
+
+        if in_sources_section {
+            // Parse lines like: " │      59. Meteor Lake-P HD Audio Controller Stereo Microphone [vol: 1.00]"
+            // or with asterisk: " │  *   60. Device Name [vol: 0.79]"
+            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─');
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let is_default = trimmed.starts_with('*');
+            let trimmed = trimmed.trim_start_matches(|c| c == '*' || c == ' ');
+
+            // Parse ID and name: "59. Device Name [vol: 1.00]"
+            if let Some(dot_pos) = trimmed.find(". ") {
+                if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
+                    let rest = &trimmed[dot_pos + 2..];
+                    // Remove the [vol: x.xx] suffix
+                    let name = if let Some(bracket_pos) = rest.rfind('[') {
+                        rest[..bracket_pos].trim().to_string()
+                    } else {
+                        rest.trim().to_string()
+                    };
+
+                    if !name.is_empty() {
+                        devices.push(WpDevice { id, name, is_default });
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(devices)
+}
+
+#[tauri::command]
+fn get_selected_device(state: State<'_, AudioState>) -> Option<u32> {
+    *state.selected_device_id.lock().unwrap()
+}
+
+#[tauri::command]
+fn set_selected_device(state: State<'_, AudioState>, device_id: Option<u32>) {
+    *state.selected_device_id.lock().unwrap() = device_id;
+
+    // Set the default source in WirePlumber if a device is selected
+    if let Some(id) = device_id {
+        let _ = std::process::Command::new("wpctl")
+            .args(["set-default", &id.to_string()])
+            .status();
+    }
+}
+
+// Helper function to get the audio input device
+// Uses WirePlumber's default device (set via wpctl set-default)
 fn get_input_device() -> Result<Device, String> {
     let host = cpal::default_host();
 
@@ -224,8 +328,6 @@ fn get_input_device() -> Result<Device, String> {
     eprintln!("Available audio hosts: {:?}", cpal::available_hosts());
     eprintln!("Using host: {:?}", host.id());
 
-    // On Linux with PipeWire, prefer the "pipewire" device over "default"
-    // The "default" ALSA device can crash GNOME when Bluetooth audio is active
     if let Ok(devices) = host.input_devices() {
         let devices: Vec<_> = devices.collect();
 
@@ -235,11 +337,12 @@ fn get_input_device() -> Result<Device, String> {
             }
         }
 
-        // Try to find "pipewire" device first - it handles Bluetooth better
+        // Try to find "pipewire" device first - it uses WirePlumber's default source
+        // and handles Bluetooth better than ALSA devices
         for device in devices {
             if let Ok(name) = device.name() {
                 if name == "pipewire" {
-                    eprintln!("Selected input device: {} (preferred for Bluetooth compatibility)", name);
+                    eprintln!("Selected input device: {} (uses WirePlumber default)", name);
                     return Ok(device);
                 }
             }
@@ -634,7 +737,8 @@ async fn start_recording(
 
     // Get audio device info in a blocking thread to avoid interfering with GTK main loop
     // This is critical for Bluetooth devices on PipeWire which can crash GNOME
-    let (device, config) = tokio::task::spawn_blocking(|| {
+    // Note: Device selection is handled by WirePlumber via wpctl set-default
+    let (device, config) = tokio::task::spawn_blocking(move || {
         let device = get_input_device()?;
         let config = get_safe_input_config(&device)?;
         Ok::<_, String>((device, config))
@@ -1045,6 +1149,7 @@ pub fn run() {
         llm_prompt: Arc::new(Mutex::new(String::new())),
         stt_service: Arc::new(Mutex::new(SttService::Deepgram)),
         auto_type_transcription: Arc::new(Mutex::new(false)),
+        selected_device_id: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -1066,6 +1171,9 @@ pub fn run() {
             set_stt_service,
             get_stt_service,
             set_auto_type_transcription,
+            list_audio_devices,
+            get_selected_device,
+            set_selected_device,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
