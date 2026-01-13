@@ -2,6 +2,13 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Critical Rules
+
+1. **No command execution**: Never execute `cargo` or `rustc` commands directly. Always ask the user to run these commands manually.
+
+2. **UI components**: Always use shadcn-vue components with Tailwind CSS 4 for creating UI.
+
+
 ## Project Overview
 
 **HyperWhisper** is a cross-platform desktop speech-to-text application built with Tauri v2 + React. It provides real-time audio transcription using the Deepgram API, with the ability to record, save, and playback audio recordings.
