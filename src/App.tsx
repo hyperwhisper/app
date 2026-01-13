@@ -435,7 +435,7 @@ function App() {
   const handleDrag = () => getCurrentWindow().startDragging();
 
   return (
-    <main className="flex flex-col items-center justify-center h-screen w-screen relative bg-background">
+    <main className="flex flex-col items-center justify-center h-screen w-screen relative bg-white/10 backdrop-blur-2xl backdrop-saturate-150 rounded-2xl border border-white/20 shadow-xl">
       {/* Drag handle area */}
       <div
         className="absolute top-0 left-0 right-0 h-5 cursor-move z-50"
@@ -500,6 +500,15 @@ function App() {
           <Mic className="h-5 w-5" />
         )}
       </Button>
+
+      {/* Transcription text */}
+      {finalText && !isRecording && (
+        <div className="mt-4 px-4 w-full max-w-[700px] max-h-[80px] overflow-y-auto">
+          <p className="text-sm text-foreground/90 text-center leading-relaxed">
+            {finalText}
+          </p>
+        </div>
+      )}
     </main>
   );
 }

@@ -15,8 +15,10 @@
         "label": "main",
         "title": "hyperwhisper",
         "width": 800,
-        "height": 135,
-        "decorations": false
+        "height": 270,
+        "decorations": false,
+        "transparent": true,
+        "backgroundColor": [0, 0, 0, 0]
       }
     ],
     "security": {
