@@ -792,24 +792,8 @@ async fn start_recording(
                 let _ = tls.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
             }
 
-            loop {
-                // Check if we should stop
-                if !*is_recording_ws.lock().unwrap() {
-                    let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
-                    let _ = ws.close(None);
-                    break;
-                }
-
-                // Send any pending audio data
-                while let Ok(samples) = audio_rx.try_recv() {
-                    let pcm_data = samples_to_linear16(&samples);
-                    if let Err(e) = ws.send(Message::Binary(pcm_data)) {
-                        eprintln!("Failed to send audio: {}", e);
-                        return;
-                    }
-                }
-
-                // Try to read messages from Deepgram (with timeout)
+            // Helper closure to process incoming Deepgram messages
+            let process_message = |ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
                 match ws.read() {
                     Ok(Message::Text(text)) => {
                         if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -839,23 +823,64 @@ async fn start_recording(
                                         text: transcript.to_string(),
                                         is_final,
                                     };
-                                    let _ = app_handle_ws.emit("transcription", event);
+                                    let _ = app_handle.emit("transcription", event);
                                 }
                             }
                         }
+                        Some(true) // Continue
                     }
                     Ok(Message::Close(_)) => {
-                        break;
+                        Some(false) // Stop
                     }
                     Err(tungstenite::Error::Io(ref e))
                         if e.kind() == std::io::ErrorKind::WouldBlock
                         || e.kind() == std::io::ErrorKind::TimedOut => {
-                        // Timeout - continue loop
+                        None // Timeout, no message
                     }
-                    Err(e) => {
-                        eprintln!("WebSocket error: {}", e);
-                        break;
+                    Err(_) => {
+                        Some(false) // Error, stop
                     }
+                    _ => Some(true)
+                }
+            };
+
+            loop {
+                // Check if we should stop
+                if !*is_recording_ws.lock().unwrap() {
+                    // Send CloseStream to Deepgram to signal end of audio
+                    let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
+
+                    // Keep reading for pending transcription results (up to 5 seconds)
+                    let drain_start = std::time::Instant::now();
+                    while drain_start.elapsed() < Duration::from_secs(5) {
+                        match process_message(&mut ws, &app_handle_ws, auto_type) {
+                            Some(false) => break, // Close or error
+                            Some(true) => {}, // Got a message, keep reading
+                            None => {
+                                // Timeout with no message - if we've waited at least 1 second, we're done
+                                if drain_start.elapsed() > Duration::from_millis(1000) {
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let _ = ws.close(None);
+                    break;
+                }
+
+                // Send any pending audio data
+                while let Ok(samples) = audio_rx.try_recv() {
+                    let pcm_data = samples_to_linear16(&samples);
+                    if let Err(e) = ws.send(Message::Binary(pcm_data)) {
+                        eprintln!("Failed to send audio: {}", e);
+                        return;
+                    }
+                }
+
+                // Try to read messages from Deepgram (with timeout)
+                match process_message(&mut ws, &app_handle_ws, auto_type) {
+                    Some(false) => break,
                     _ => {}
                 }
             }

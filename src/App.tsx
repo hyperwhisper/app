@@ -23,6 +23,7 @@ const DEFAULT_PROMPT =
 function App() {
   const [finalText, setFinalText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
   );
@@ -146,6 +147,9 @@ function App() {
   // Listen for whisper processing events
   useEffect(() => {
     const unlisten = listen<boolean>("whisper-processing", (event) => {
+      // event.payload is true when processing starts, false when done
+      setIsProcessing(event.payload);
+
       if (!event.payload && pendingWhisperProcessingRef.current) {
         pendingWhisperProcessingRef.current = false;
 
@@ -429,6 +433,12 @@ function App() {
               />
             ))}
           </div>
+        ) : isProcessing ? (
+          <div className="px-4 w-full max-h-[100px] overflow-y-auto">
+            <p className="text-sm text-white/50 text-center leading-relaxed animate-pulse">
+              {finalText || "Processing..."}
+            </p>
+          </div>
         ) : finalText ? (
           <div className="px-4 w-full max-h-[100px] overflow-y-auto">
             <p className="text-sm text-white/80 text-center leading-relaxed">
@@ -457,9 +467,14 @@ function App() {
               <div className="w-4 h-4 rounded-sm bg-red-500 animate-pulse" />
               <span className="text-white font-medium text-sm">Recording</span>
             </>
+          ) : isProcessing ? (
+            <>
+              <div className="w-4 h-4 rounded-sm bg-yellow-500 animate-pulse" />
+              <span className="text-white font-medium text-sm">Processing</span>
+            </>
           ) : (
             <>
-              <SettingsDialog disabled={isRecording} />
+              <SettingsDialog disabled={isRecording || isProcessing} />
               <span className="text-white/60 text-sm">Ready</span>
             </>
           )}
@@ -468,27 +483,24 @@ function App() {
         {/* Right: Controls */}
         <div className="flex items-center gap-2">
           {isRecording ? (
-            <>
-              <Button
-                onClick={handleRecord}
-                variant="ghost"
-                size="sm"
-                className="text-white/80 hover:text-white hover:bg-white/10"
-              >
-                Stop
-              </Button>
-            </>
+            <Button
+              onClick={handleRecord}
+              variant="ghost"
+              size="sm"
+              className="text-white/80 hover:text-white hover:bg-white/10"
+            >
+              Stop
+            </Button>
           ) : (
-            <>
-              <Button
-                onClick={handleRecord}
-                variant="ghost"
-                size="sm"
-                className="text-white/80 hover:text-white hover:bg-white/10"
-              >
-                Record
-              </Button>
-            </>
+            <Button
+              onClick={handleRecord}
+              variant="ghost"
+              size="sm"
+              className="text-white/80 hover:text-white hover:bg-white/10"
+              disabled={isProcessing}
+            >
+              Record
+            </Button>
           )}
         </div>
       </div>
