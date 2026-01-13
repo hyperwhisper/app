@@ -2,7 +2,6 @@ use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use std::fs;
-use std::io::Write;
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -21,6 +20,11 @@ pub struct AudioState {
     sample_rate: Arc<Mutex<Option<u32>>>,
     stop_signal: Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>,
     api_key: Arc<Mutex<Option<String>>>,
+    // Hyperwhisper server settings
+    use_hyperwhisper_server: Arc<Mutex<bool>>,
+    hyperwhisper_server_url: Arc<Mutex<String>>,
+    hyperwhisper_server_https: Arc<Mutex<bool>>,
+    hyperwhisper_api_key: Arc<Mutex<Option<String>>>,
     // Real-time typing: type transcription as it streams in
     auto_type_transcription: Arc<Mutex<bool>>,
     // Selected audio input device ID from WirePlumber (None = auto-select)
@@ -391,8 +395,50 @@ fn samples_to_linear16(samples: &[f32]) -> Vec<u8> {
     bytes
 }
 
-// Connect to Deepgram WebSocket
-fn connect_to_deepgram(api_key: &str, sample_rate: u32) -> Result<WebSocket<MaybeTlsStream<TcpStream>>, String> {
+// Enum to hold either TLS or plain TCP WebSocket
+enum WsStream {
+    Tls(WebSocket<MaybeTlsStream<TcpStream>>),
+    Plain(WebSocket<TcpStream>),
+}
+
+impl WsStream {
+    fn send(&mut self, msg: Message) -> Result<(), tungstenite::Error> {
+        match self {
+            WsStream::Tls(ws) => ws.send(msg),
+            WsStream::Plain(ws) => ws.send(msg),
+        }
+    }
+
+    fn read(&mut self) -> Result<Message, tungstenite::Error> {
+        match self {
+            WsStream::Tls(ws) => ws.read(),
+            WsStream::Plain(ws) => ws.read(),
+        }
+    }
+
+    fn close(&mut self, _: Option<tungstenite::protocol::CloseFrame>) -> Result<(), tungstenite::Error> {
+        match self {
+            WsStream::Tls(ws) => ws.close(None),
+            WsStream::Plain(ws) => ws.close(None),
+        }
+    }
+
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> std::io::Result<()> {
+        match self {
+            WsStream::Tls(ws) => {
+                if let MaybeTlsStream::NativeTls(ref tls) = ws.get_ref() {
+                    tls.get_ref().set_read_timeout(timeout)
+                } else {
+                    Ok(())
+                }
+            }
+            WsStream::Plain(ws) => ws.get_ref().set_read_timeout(timeout),
+        }
+    }
+}
+
+// Connect to Deepgram WebSocket (TLS)
+fn connect_to_deepgram(api_key: &str, sample_rate: u32) -> Result<WsStream, String> {
     let url_str = format!(
         "wss://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&interim_results=true&encoding=linear16&sample_rate={}&channels=1",
         sample_rate
@@ -430,12 +476,88 @@ fn connect_to_deepgram(api_key: &str, sample_rate: u32) -> Result<WebSocket<Mayb
     let (ws, _response) = tungstenite::client::client(request, MaybeTlsStream::NativeTls(tls_stream))
         .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
 
-    Ok(ws)
+    Ok(WsStream::Tls(ws))
+}
+
+// Connect to Hyperwhisper server WebSocket
+fn connect_to_hyperwhisper_server(api_key: &str, sample_rate: u32, server_url: &str, use_https: bool) -> Result<WsStream, String> {
+    let protocol = if use_https { "wss" } else { "ws" };
+    let url_str = format!(
+        "{}://{}/api/v1/deepgram/listen?model=nova-3&smart_format=true&interim_results=true&encoding=linear16&sample_rate={}&channels=1",
+        protocol, server_url, sample_rate
+    );
+
+    let url = Url::parse(&url_str).map_err(|e| format!("Invalid URL: {}", e))?;
+    let host = url.host_str().ok_or("No host in URL")?;
+    let port = url.port().unwrap_or(if use_https { 443 } else { 80 });
+
+    if use_https {
+        // Connect with TLS
+        let connector = native_tls::TlsConnector::new()
+            .map_err(|e| format!("Failed to create TLS connector: {}", e))?;
+
+        let stream = TcpStream::connect(format!("{}:{}", host, port))
+            .map_err(|e| format!("Failed to connect to Hyperwhisper server: {}", e))?;
+
+        let tls_stream = connector
+            .connect(host, stream)
+            .map_err(|e| format!("TLS handshake failed: {}", e))?;
+
+        let request = tungstenite::http::Request::builder()
+            .uri(&url_str)
+            .header("X-API-Key", api_key)
+            .header("Host", host)
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+            .body(())
+            .map_err(|e| format!("Failed to build request: {}", e))?;
+
+        let (ws, _response) = tungstenite::client::client(request, MaybeTlsStream::NativeTls(tls_stream))
+            .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
+
+        Ok(WsStream::Tls(ws))
+    } else {
+        // Connect without TLS (plain TCP)
+        let stream = TcpStream::connect(format!("{}:{}", host, port))
+            .map_err(|e| format!("Failed to connect to Hyperwhisper server: {}", e))?;
+
+        let request = tungstenite::http::Request::builder()
+            .uri(&url_str)
+            .header("X-API-Key", api_key)
+            .header("Host", format!("{}:{}", host, port))
+            .header("Connection", "Upgrade")
+            .header("Upgrade", "websocket")
+            .header("Sec-WebSocket-Version", "13")
+            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+            .body(())
+            .map_err(|e| format!("Failed to build request: {}", e))?;
+
+        let (ws, _response) = tungstenite::client::client(request, stream)
+            .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
+
+        Ok(WsStream::Plain(ws))
+    }
 }
 
 #[tauri::command]
 fn set_api_key(state: State<'_, AudioState>, api_key: String) {
     *state.api_key.lock().unwrap() = Some(api_key);
+}
+
+#[tauri::command]
+fn set_hyperwhisper_server_settings(
+    state: State<'_, AudioState>,
+    use_hyperwhisper_server: bool,
+    server_url: String,
+    use_https: bool,
+    api_key: Option<String>,
+) {
+    *state.use_hyperwhisper_server.lock().unwrap() = use_hyperwhisper_server;
+    *state.hyperwhisper_server_url.lock().unwrap() = server_url;
+    *state.hyperwhisper_server_https.lock().unwrap() = use_https;
+    *state.hyperwhisper_api_key.lock().unwrap() = api_key;
 }
 
 fn type_text_internal(text: &str) -> Result<(), String> {
@@ -493,9 +615,19 @@ async fn start_recording(
         }
     }
 
-    // Get API key
-    let api_key = state.api_key.lock().unwrap().clone()
-        .ok_or_else(|| "Deepgram API key not set".to_string())?;
+    // Check if using Hyperwhisper server or direct Deepgram
+    let use_hyperwhisper = *state.use_hyperwhisper_server.lock().unwrap();
+    let hyperwhisper_url = state.hyperwhisper_server_url.lock().unwrap().clone();
+    let hyperwhisper_https = *state.hyperwhisper_server_https.lock().unwrap();
+
+    // Get the appropriate API key
+    let api_key = if use_hyperwhisper {
+        state.hyperwhisper_api_key.lock().unwrap().clone()
+            .ok_or_else(|| "Hyperwhisper API key not set".to_string())?
+    } else {
+        state.api_key.lock().unwrap().clone()
+            .ok_or_else(|| "Deepgram API key not set".to_string())?
+    };
 
     // Clear previous recording
     *state.recorded_samples.lock().unwrap() = Vec::new();
@@ -535,28 +667,37 @@ async fn start_recording(
     // Channel for sending audio chunks to WebSocket thread
     let (audio_tx, audio_rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
-    // Spawn WebSocket thread for Deepgram
+    // Spawn WebSocket thread for Deepgram or Hyperwhisper server
     let app_handle_ws = app_handle.clone();
     let is_recording_ws = is_recording_arc.clone();
     let auto_type = *state.auto_type_transcription.lock().unwrap();
     thread::spawn(move || {
-        // Connect to Deepgram
-        let mut ws = match connect_to_deepgram(&api_key, sample_rate) {
-            Ok(ws) => ws,
-            Err(e) => {
-                eprintln!("Failed to connect to Deepgram: {}", e);
-                let _ = app_handle_ws.emit("transcription-error", e);
-                return;
+        // Connect to Hyperwhisper server or Deepgram
+        let mut ws = if use_hyperwhisper {
+            match connect_to_hyperwhisper_server(&api_key, sample_rate, &hyperwhisper_url, hyperwhisper_https) {
+                Ok(ws) => ws,
+                Err(e) => {
+                    eprintln!("Failed to connect to Hyperwhisper server: {}", e);
+                    let _ = app_handle_ws.emit("transcription-error", e);
+                    return;
+                }
+            }
+        } else {
+            match connect_to_deepgram(&api_key, sample_rate) {
+                Ok(ws) => ws,
+                Err(e) => {
+                    eprintln!("Failed to connect to Deepgram: {}", e);
+                    let _ = app_handle_ws.emit("transcription-error", e);
+                    return;
+                }
             }
         };
 
         // Set read timeout so we can check for stop signal and send audio
-        if let MaybeTlsStream::NativeTls(ref tls) = ws.get_ref() {
-            let _ = tls.get_ref().set_read_timeout(Some(Duration::from_millis(50)));
-        }
+        let _ = ws.set_read_timeout(Some(Duration::from_millis(50)));
 
         // Helper closure to process incoming Deepgram messages
-        let process_message = |ws: &mut WebSocket<MaybeTlsStream<TcpStream>>, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
+        let process_message = |ws: &mut WsStream, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
             match ws.read() {
                 Ok(Message::Text(text)) => {
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -835,6 +976,10 @@ pub fn run() {
         sample_rate: Arc::new(Mutex::new(None)),
         stop_signal: Arc::new(Mutex::new(None)),
         api_key: Arc::new(Mutex::new(None)),
+        use_hyperwhisper_server: Arc::new(Mutex::new(true)),
+        hyperwhisper_server_url: Arc::new(Mutex::new("localhost:1323".to_string())),
+        hyperwhisper_server_https: Arc::new(Mutex::new(false)),
+        hyperwhisper_api_key: Arc::new(Mutex::new(None)),
         auto_type_transcription: Arc::new(Mutex::new(false)),
         selected_device_id: Arc::new(Mutex::new(None)),
     };
@@ -847,6 +992,7 @@ pub fn run() {
             stop_recording,
             is_recording,
             set_api_key,
+            set_hyperwhisper_server_settings,
             type_text,
             set_auto_type_transcription,
             list_audio_devices,

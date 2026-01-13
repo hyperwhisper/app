@@ -27,13 +27,28 @@ export function SettingsPage() {
     return stored ? parseInt(stored, 10) : null;
   });
 
-  // API key
+  // Hyperwhisper Server settings
+  const [useHyperwhisperServer, setUseHyperwhisperServer] = useState(
+    () => localStorage.getItem("use_hyperwhisper_server") !== "false"
+  );
+  const [hyperwhisperServerUrl, setHyperwhisperServerUrl] = useState(
+    () => localStorage.getItem("hyperwhisper_server_url") || "localhost:1323"
+  );
+  const [hyperwhisperServerHttps, setHyperwhisperServerHttps] = useState(
+    () => localStorage.getItem("hyperwhisper_server_https") === "true"
+  );
+  const [hyperwhisperApiKey, setHyperwhisperApiKey] = useState(
+    () => localStorage.getItem("hyperwhisper_api_key") || ""
+  );
+  const [showHyperwhisperApiKey, setShowHyperwhisperApiKey] = useState(false);
+
+  // Deepgram API key
   const [apiKey, setApiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
   );
   const [showApiKey, setShowApiKey] = useState(false);
 
-  // Save settings to localStorage and sync with backend
+  // Save Deepgram API key
   useEffect(() => {
     localStorage.setItem("deepgram_api_key", apiKey);
     if (apiKey.trim()) {
@@ -41,6 +56,21 @@ export function SettingsPage() {
     }
   }, [apiKey]);
 
+  // Save Hyperwhisper Server settings
+  useEffect(() => {
+    localStorage.setItem("use_hyperwhisper_server", String(useHyperwhisperServer));
+    localStorage.setItem("hyperwhisper_server_url", hyperwhisperServerUrl);
+    localStorage.setItem("hyperwhisper_server_https", String(hyperwhisperServerHttps));
+    localStorage.setItem("hyperwhisper_api_key", hyperwhisperApiKey);
+    invoke("set_hyperwhisper_server_settings", {
+      useHyperwhisperServer,
+      serverUrl: hyperwhisperServerUrl.trim() || "localhost:1323",
+      useHttps: hyperwhisperServerHttps,
+      apiKey: hyperwhisperApiKey.trim() || null,
+    });
+  }, [useHyperwhisperServer, hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
+
+  // Save selected device
   useEffect(() => {
     if (selectedDeviceId !== null) {
       localStorage.setItem("selected_audio_device_id", String(selectedDeviceId));
@@ -130,46 +160,160 @@ export function SettingsPage() {
             </p>
           </div>
 
-          {/* API Key */}
+          {/* Service Selection */}
           <div className="space-y-2">
-            <Label
-              htmlFor="deepgram-key"
-              className="text-xs uppercase tracking-wide text-white/50"
-            >
-              Deepgram API Key
+            <Label className="text-xs uppercase tracking-wide text-white/50">
+              Transcription Service
             </Label>
-            <div className="relative">
-              <Input
-                id="deepgram-key"
-                type={showApiKey ? "text" : "password"}
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder="Enter your API key"
-                className="bg-white/5 border-0 text-white placeholder:text-white/30 pr-10"
-              />
+            <div className="flex gap-2">
               <button
-                type="button"
-                onClick={() => setShowApiKey(!showApiKey)}
-                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white/80 transition-colors"
-                title={showApiKey ? "Hide API key" : "Show API key"}
+                onClick={() => setUseHyperwhisperServer(true)}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm transition-colors ${
+                  useHyperwhisperServer
+                    ? "bg-white/15 text-white"
+                    : "bg-white/5 text-white/50 hover:bg-white/10"
+                }`}
               >
-                {showApiKey ? (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
-                    <line x1="1" y1="1" x2="23" y2="23"/>
-                  </svg>
-                ) : (
-                  <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
-                    <circle cx="12" cy="12" r="3"/>
-                  </svg>
-                )}
+                Hyperwhisper
+              </button>
+              <button
+                onClick={() => setUseHyperwhisperServer(false)}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm transition-colors ${
+                  !useHyperwhisperServer
+                    ? "bg-white/15 text-white"
+                    : "bg-white/5 text-white/50 hover:bg-white/10"
+                }`}
+              >
+                Deepgram
               </button>
             </div>
-            <p className="text-xs text-white/30">
-              Get your free API key at <span className="text-white/50">deepgram.com</span>
-            </p>
           </div>
+
+          {/* Hyperwhisper Server settings - shown when using Hyperwhisper */}
+          {useHyperwhisperServer && (
+            <>
+              {/* Server URL */}
+              <div className="space-y-2">
+                <Label
+                  htmlFor="hyperwhisper-url"
+                  className="text-xs uppercase tracking-wide text-white/50"
+                >
+                  Server URL
+                </Label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setHyperwhisperServerHttps(false)}
+                    className={`py-2 px-3 rounded-lg text-sm transition-colors ${
+                      !hyperwhisperServerHttps
+                        ? "bg-white/15 text-white"
+                        : "bg-white/5 text-white/50 hover:bg-white/10"
+                    }`}
+                  >
+                    http://
+                  </button>
+                  <button
+                    onClick={() => setHyperwhisperServerHttps(true)}
+                    className={`py-2 px-3 rounded-lg text-sm transition-colors ${
+                      hyperwhisperServerHttps
+                        ? "bg-white/15 text-white"
+                        : "bg-white/5 text-white/50 hover:bg-white/10"
+                    }`}
+                  >
+                    https://
+                  </button>
+                  <Input
+                    id="hyperwhisper-url"
+                    type="text"
+                    value={hyperwhisperServerUrl}
+                    onChange={(e) => setHyperwhisperServerUrl(e.target.value)}
+                    placeholder="localhost:1323"
+                    className="flex-1 bg-white/5 border-0 text-white placeholder:text-white/30"
+                  />
+                </div>
+              </div>
+
+              {/* Hyperwhisper API Key */}
+              <div className="space-y-2">
+                <Label
+                  htmlFor="hyperwhisper-key"
+                  className="text-xs uppercase tracking-wide text-white/50"
+                >
+                  API Key
+                </Label>
+                <div className="relative">
+                  <Input
+                    id="hyperwhisper-key"
+                    type={showHyperwhisperApiKey ? "text" : "password"}
+                    value={hyperwhisperApiKey}
+                    onChange={(e) => setHyperwhisperApiKey(e.target.value)}
+                    placeholder="Enter your API key"
+                    className="bg-white/5 border-0 text-white placeholder:text-white/30 pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowHyperwhisperApiKey(!showHyperwhisperApiKey)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white/80 transition-colors"
+                    title={showHyperwhisperApiKey ? "Hide API key" : "Show API key"}
+                  >
+                    {showHyperwhisperApiKey ? (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                        <line x1="1" y1="1" x2="23" y2="23"/>
+                      </svg>
+                    ) : (
+                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                        <circle cx="12" cy="12" r="3"/>
+                      </svg>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Deepgram API Key - shown when using Deepgram */}
+          {!useHyperwhisperServer && (
+            <div className="space-y-2">
+              <Label
+                htmlFor="deepgram-key"
+                className="text-xs uppercase tracking-wide text-white/50"
+              >
+                Deepgram API Key
+              </Label>
+              <div className="relative">
+                <Input
+                  id="deepgram-key"
+                  type={showApiKey ? "text" : "password"}
+                  value={apiKey}
+                  onChange={(e) => setApiKey(e.target.value)}
+                  placeholder="Enter your API key"
+                  className="bg-white/5 border-0 text-white placeholder:text-white/30 pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowApiKey(!showApiKey)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-white/40 hover:text-white/80 transition-colors"
+                  title={showApiKey ? "Hide API key" : "Show API key"}
+                >
+                  {showApiKey ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/>
+                      <line x1="1" y1="1" x2="23" y2="23"/>
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                      <circle cx="12" cy="12" r="3"/>
+                    </svg>
+                  )}
+                </button>
+              </div>
+              <p className="text-xs text-white/30">
+                Get your free API key at <span className="text-white/50">deepgram.com</span>
+              </p>
+            </div>
+          )}
         </div>
       </div>
     </main>

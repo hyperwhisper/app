@@ -27,6 +27,20 @@ function App() {
     () => localStorage.getItem("auto_type_enabled") !== "false"
   );
 
+  // Hyperwhisper server settings
+  const [useHyperwhisperServer] = useState(
+    () => localStorage.getItem("use_hyperwhisper_server") !== "false"
+  );
+  const [hyperwhisperServerUrl] = useState(
+    () => localStorage.getItem("hyperwhisper_server_url") || "localhost:1323"
+  );
+  const [hyperwhisperServerHttps] = useState(
+    () => localStorage.getItem("hyperwhisper_server_https") === "true"
+  );
+  const [hyperwhisperApiKey] = useState(
+    () => localStorage.getItem("hyperwhisper_api_key") || ""
+  );
+
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
   const finalTextRef = useRef<string>("");
@@ -50,6 +64,16 @@ function App() {
   useEffect(() => {
     localStorage.setItem("auto_type_enabled", String(autoTypeEnabled));
   }, [autoTypeEnabled]);
+
+  // Sync Hyperwhisper server settings to backend on load
+  useEffect(() => {
+    invoke("set_hyperwhisper_server_settings", {
+      useHyperwhisperServer,
+      serverUrl: hyperwhisperServerUrl.trim() || "localhost:1323",
+      useHttps: hyperwhisperServerHttps,
+      apiKey: hyperwhisperApiKey.trim() || null,
+    });
+  }, [useHyperwhisperServer, hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
 
   // Save selected device to localStorage and sync with backend
   useEffect(() => {
@@ -204,9 +228,20 @@ function App() {
 
   // Start recording
   const startRecording = async () => {
-    if (!apiKey.trim()) {
-      alert("Please enter your Deepgram API key first");
-      return;
+    // Check for the appropriate API key based on server setting
+    const currentUseHyperwhisper = localStorage.getItem("use_hyperwhisper_server") !== "false";
+    if (currentUseHyperwhisper) {
+      const currentHyperwhisperKey = localStorage.getItem("hyperwhisper_api_key") || "";
+      if (!currentHyperwhisperKey.trim()) {
+        alert("Please enter your Hyperwhisper API key first");
+        return;
+      }
+    } else {
+      const currentApiKey = localStorage.getItem("deepgram_api_key") || "";
+      if (!currentApiKey.trim()) {
+        alert("Please enter your Deepgram API key first");
+        return;
+      }
     }
 
     try {
