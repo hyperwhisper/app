@@ -24,6 +24,7 @@ function App() {
   const [finalText, setFinalText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
   );
@@ -422,7 +423,7 @@ function App() {
       onMouseDown={handleDrag}
     >
       {/* Waveform area */}
-      <div className="flex-1 flex items-center justify-center px-8">
+      <div className="flex-1 flex items-center justify-center px-8 relative">
         {isRecording ? (
           <div className="flex items-center justify-center gap-[3px] h-[60px] w-full">
             {[...Array(80)].map((_, i) => (
@@ -455,6 +456,32 @@ function App() {
               />
             ))}
           </div>
+        )}
+        {/* Copy button - bottom right of waveform area */}
+        {finalText && !isRecording && (
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              navigator.clipboard.writeText(finalText).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 1500);
+              });
+            }}
+            className={`absolute bottom-2 right-4 p-1 transition-colors text-xs flex items-center gap-1 ${
+              copied ? "text-green-400" : "text-white/40 hover:text-white/80"
+            }`}
+            title="Copy to clipboard"
+          >
+            {copied ? (
+              <span>Copied!</span>
+            ) : (
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
+                <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+              </svg>
+            )}
+          </button>
         )}
       </div>
 
