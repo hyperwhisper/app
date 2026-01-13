@@ -2,17 +2,8 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { SettingsDialog } from "@/components/settings-dialog";
-import { Mic, Square } from "lucide-react";
 
 type SttService = "deepgram" | "whisper";
 
@@ -24,12 +15,6 @@ interface TranscriptionEvent {
 interface LlmResponseEvent {
   text: string;
   is_error: boolean;
-}
-
-interface WpDevice {
-  id: number;
-  name: string;
-  is_default: boolean;
 }
 
 const DEFAULT_PROMPT =
@@ -51,13 +36,10 @@ function App() {
   );
 
   // Audio device state
-  const [audioDevices, setAudioDevices] = useState<WpDevice[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(
-    () => {
-      const stored = localStorage.getItem("selected_audio_device_id");
-      return stored ? parseInt(stored, 10) : null;
-    }
-  );
+  const [selectedDeviceId] = useState<number | null>(() => {
+    const stored = localStorage.getItem("selected_audio_device_id");
+    return stored ? parseInt(stored, 10) : null;
+  });
 
   // LLM state
   const [llmPrompt] = useState(
@@ -143,19 +125,6 @@ function App() {
       }
     };
     checkModel();
-  }, []);
-
-  // Load audio devices
-  useEffect(() => {
-    const loadDevices = async () => {
-      try {
-        const devices = await invoke<WpDevice[]>("list_audio_devices");
-        setAudioDevices(devices);
-      } catch (err) {
-        console.error("Failed to load audio devices:", err);
-      }
-    };
-    loadDevices();
   }, []);
 
   // Save selected device to localStorage and sync with backend
@@ -273,7 +242,14 @@ function App() {
 
       const draw = () => {
         const canvas = canvasRef.current;
-        if (!canvas || !analyserRef.current) return;
+        if (!canvas) {
+          console.log("No canvas");
+          return;
+        }
+        if (!analyserRef.current) {
+          console.log("No analyser");
+          return;
+        }
 
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
@@ -288,26 +264,28 @@ function App() {
         const isDark = document.documentElement.classList.contains("dark");
         const barColor = isDark ? "hsl(186, 100%, 50%)" : "hsl(221, 83%, 53%)";
 
-        // Draw waveform as bars
-        const barWidth = 3;
-        const gap = 2;
-        const totalBars = Math.floor(width / (barWidth + gap));
+        // Draw waveform as slim bars centered vertically
+        const barWidth = 2;
+        const gap = 3;
+        const totalBars = 48;
+        const totalWidth = totalBars * (barWidth + gap) - gap;
+        const startX = (width - totalWidth) / 2;
         const step = Math.floor(dataArray.length / totalBars);
 
         for (let i = 0; i < totalBars; i++) {
           const dataIndex = i * step;
           const value = dataArray[dataIndex] || 0;
-          const barHeight = (value / 255) * height * 0.8;
-          const x = i * (barWidth + gap);
+          // Min height of 4px, max of 90% canvas height
+          const minHeight = 4;
+          const barHeight = Math.max(minHeight, (value / 255) * height * 0.9);
+          const x = startX + i * (barWidth + gap);
           const y = (height - barHeight) / 2;
 
           ctx.fillStyle = barColor;
           ctx.fillRect(x, y, barWidth, barHeight);
         }
 
-        if (isRecording) {
-          animationRef.current = requestAnimationFrame(draw);
-        }
+        animationRef.current = requestAnimationFrame(draw);
       };
 
       draw();
@@ -435,80 +413,95 @@ function App() {
   const handleDrag = () => getCurrentWindow().startDragging();
 
   return (
-    <main className="flex flex-col items-center justify-center h-screen w-screen relative bg-white/10 backdrop-blur-2xl backdrop-saturate-150 rounded-2xl border border-white/20 shadow-xl">
-      {/* Drag handle area */}
-      <div
-        className="absolute top-0 left-0 right-0 h-5 cursor-move z-50"
-        onMouseDown={handleDrag}
-      />
-
-      {/* Header with settings button and title */}
-      <div className="absolute top-2 left-0 right-0 flex items-center justify-between px-3">
-        <SettingsDialog disabled={isRecording} />
-        <span className="text-xs text-muted-foreground font-medium tracking-wide">
-          hyperwhisper
-        </span>
-        <div className="w-8" /> {/* Spacer for balance */}
-      </div>
-
-      {/* Audio device selector */}
-      <div className="mb-3 w-full max-w-[280px]">
-        <Select
-          value={selectedDeviceId?.toString() ?? "auto"}
-          onValueChange={(v) =>
-            setSelectedDeviceId(v === "auto" ? null : parseInt(v, 10))
-          }
-          disabled={isRecording}
-        >
-          <SelectTrigger className="h-8 text-xs">
-            <SelectValue placeholder="Auto" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="auto">Auto</SelectItem>
-            {audioDevices.map((device) => (
-              <SelectItem key={device.id} value={device.id.toString()}>
-                {device.name}
-                {device.is_default ? " *" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      {/* Waveform canvas */}
-      <canvas
-        ref={canvasRef}
-        width={600}
-        height={40}
-        className="w-[600px] h-[40px] mb-3"
-      />
-
-      {/* Record button */}
-      <Button
-        onClick={handleRecord}
-        size="lg"
-        className={cn(
-          "h-14 w-14 rounded-full transition-all duration-200",
-          isRecording
-            ? "bg-destructive hover:bg-destructive/90 animate-pulse"
-            : "bg-primary hover:bg-primary/90"
-        )}
-      >
+    <main
+      className="flex flex-col h-screen w-screen relative bg-neutral-800/90 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl overflow-hidden"
+      onMouseDown={handleDrag}
+    >
+      {/* Waveform area */}
+      <div className="flex-1 flex items-center justify-center px-8">
         {isRecording ? (
-          <Square className="h-5 w-5 fill-current" />
+          <div className="flex items-center justify-center gap-[3px] h-[60px] w-full">
+            {[...Array(80)].map((_, i) => {
+              // More varied initial scales that look like mid-animation
+              const initialScales = [0.35, 0.6, 0.25, 0.8, 0.45, 0.7, 0.3, 0.55, 0.9, 0.4, 0.65, 0.2, 0.75, 0.5];
+              return (
+                <div
+                  key={i}
+                  className={`w-[2px] bg-white/70 rounded-full animate-sound-bar-${(i % 5) + 1}`}
+                  style={{
+                    animationDelay: `${(i * 0.03) + (i % 7) * 0.05}s`,
+                    height: '100%',
+                    transform: `scaleY(${initialScales[i % 14]})`,
+                  }}
+                />
+              );
+            })}
+          </div>
+        ) : finalText ? (
+          <div className="px-4 w-full max-h-[100px] overflow-y-auto">
+            <p className="text-sm text-white/80 text-center leading-relaxed">
+              {finalText}
+            </p>
+          </div>
         ) : (
-          <Mic className="h-5 w-5" />
+          <div className="flex items-center justify-center gap-[3px] h-[60px] w-full opacity-30">
+            {[...Array(80)].map((_, i) => (
+              <div
+                key={i}
+                className="w-[2px] bg-white/50 rounded-full"
+                style={{ height: `${4 + (i % 3) * 2}px` }}
+              />
+            ))}
+          </div>
         )}
-      </Button>
+      </div>
 
-      {/* Transcription text */}
-      {finalText && !isRecording && (
-        <div className="mt-4 px-4 w-full max-w-[700px] max-h-[80px] overflow-y-auto">
-          <p className="text-sm text-foreground/90 text-center leading-relaxed">
-            {finalText}
-          </p>
+      {/* Bottom bar */}
+      <div className="h-14 bg-neutral-900/80 border-t border-white/10 flex items-center justify-between px-4">
+        {/* Left: Recording status */}
+        <div className="flex items-center gap-2">
+          {isRecording ? (
+            <>
+              <div className="w-4 h-4 rounded-sm bg-red-500 animate-pulse" />
+              <span className="text-white font-medium text-sm">Recording</span>
+            </>
+          ) : (
+            <>
+              <SettingsDialog disabled={isRecording} />
+              <span className="text-white/60 text-sm">Ready</span>
+            </>
+          )}
         </div>
-      )}
+
+        {/* Right: Controls */}
+        <div className="flex items-center gap-2">
+          {isRecording ? (
+            <>
+              <Button
+                onClick={handleRecord}
+                variant="ghost"
+                size="sm"
+                className="text-white/80 hover:text-white hover:bg-white/10"
+              >
+                Stop
+              </Button>
+              <span className="text-white/30 text-xs bg-white/10 px-2 py-1 rounded">⌥Space</span>
+            </>
+          ) : (
+            <>
+              <Button
+                onClick={handleRecord}
+                variant="ghost"
+                size="sm"
+                className="text-white/80 hover:text-white hover:bg-white/10"
+              >
+                Record
+              </Button>
+              <span className="text-white/30 text-xs bg-white/10 px-2 py-1 rounded">⌥Space</span>
+            </>
+          )}
+        </div>
+      </div>
     </main>
   );
 }
