@@ -414,7 +414,7 @@ function App() {
 
   return (
     <main
-      className="flex flex-col h-screen w-screen relative bg-neutral-800/90 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl overflow-hidden"
+      className="flex flex-col h-screen w-screen relative bg-neutral-800/70 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl overflow-hidden"
       onMouseDown={handleDrag}
     >
       {/* Waveform area */}
