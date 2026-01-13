@@ -2,9 +2,18 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import "./App.css";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { SettingsDialog } from "@/components/settings-dialog";
+import { Mic, Square } from "lucide-react";
 
-type Theme = "light" | "dark" | "system";
 type SttService = "deepgram" | "whisper";
 
 interface TranscriptionEvent {
@@ -17,54 +26,57 @@ interface LlmResponseEvent {
   is_error: boolean;
 }
 
-interface DownloadProgressEvent {
-  downloaded: number;
-  total: number;
-  percent: number;
-}
-
 interface WpDevice {
   id: number;
   name: string;
   is_default: boolean;
 }
 
-const DEFAULT_PROMPT = "You are a helpful assistant. Process the following transcription and provide a refined response:";
+const DEFAULT_PROMPT =
+  "You are a helpful assistant. Process the following transcription and provide a refined response:";
 
 function App() {
   const [finalText, setFinalText] = useState("");
-  const [theme, setTheme] = useState<Theme>("system");
   const [isRecording, setIsRecording] = useState(false);
-  const [apiKey, setApiKey] = useState(() => localStorage.getItem("deepgram_api_key") || "");
+  const [apiKey] = useState(
+    () => localStorage.getItem("deepgram_api_key") || ""
+  );
 
   // STT service state
-  const [sttService, setSttService] = useState<SttService>(() =>
-    (localStorage.getItem("stt_service") as SttService) || "deepgram"
+  const [sttService] = useState<SttService>(
+    () => (localStorage.getItem("stt_service") as SttService) || "deepgram"
   );
-  const [whisperModelExists, setWhisperModelExists] = useState<boolean | null>(null);
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
+  const [whisperModelExists, setWhisperModelExists] = useState<boolean | null>(
+    null
+  );
 
   // Audio device state
   const [audioDevices, setAudioDevices] = useState<WpDevice[]>([]);
-  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(() => {
-    const stored = localStorage.getItem("selected_audio_device_id");
-    return stored ? parseInt(stored, 10) : null;
-  });
+  const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(
+    () => {
+      const stored = localStorage.getItem("selected_audio_device_id");
+      return stored ? parseInt(stored, 10) : null;
+    }
+  );
 
   // LLM state
-  const [llmPrompt] = useState(() => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT);
-  const [openRouterApiKey, setOpenRouterApiKey] = useState(() => localStorage.getItem("openrouter_api_key") || "");
-  const [typeOutput] = useState<"transcription" | "llm">(() =>
-    (localStorage.getItem("type_output") as "transcription" | "llm") || "transcription"
+  const [llmPrompt] = useState(
+    () => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT
   );
-  const [llmEnabled, setLlmEnabled] = useState(() => localStorage.getItem("llm_enabled") !== "false");
-  const [realTimeTypingEnabled, setRealTimeTypingEnabled] = useState(() =>
-    localStorage.getItem("realtime_typing_enabled") !== "false"
+  const [openRouterApiKey] = useState(
+    () => localStorage.getItem("openrouter_api_key") || ""
   );
-
-  // Settings panel visibility
-  const [showSettings, setShowSettings] = useState(false);
+  const [typeOutput] = useState<"transcription" | "llm">(
+    () =>
+      (localStorage.getItem("type_output") as "transcription" | "llm") ||
+      "transcription"
+  );
+  const [llmEnabled] = useState(
+    () => localStorage.getItem("llm_enabled") !== "false"
+  );
+  const [realTimeTypingEnabled] = useState(
+    () => localStorage.getItem("realtime_typing_enabled") !== "false"
+  );
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -108,7 +120,10 @@ function App() {
   }, [llmEnabled]);
 
   useEffect(() => {
-    localStorage.setItem("realtime_typing_enabled", String(realTimeTypingEnabled));
+    localStorage.setItem(
+      "realtime_typing_enabled",
+      String(realTimeTypingEnabled)
+    );
   }, [realTimeTypingEnabled]);
 
   // Save STT service to localStorage and sync with backend
@@ -146,37 +161,15 @@ function App() {
   // Save selected device to localStorage and sync with backend
   useEffect(() => {
     if (selectedDeviceId !== null) {
-      localStorage.setItem("selected_audio_device_id", String(selectedDeviceId));
+      localStorage.setItem(
+        "selected_audio_device_id",
+        String(selectedDeviceId)
+      );
     } else {
       localStorage.removeItem("selected_audio_device_id");
     }
     invoke("set_selected_device", { deviceId: selectedDeviceId });
   }, [selectedDeviceId]);
-
-  // Listen for download events
-  useEffect(() => {
-    const unlistenProgress = listen<DownloadProgressEvent>("download-progress", (event) => {
-      setDownloadProgress(event.payload.percent);
-    });
-
-    const unlistenComplete = listen<boolean>("download-complete", () => {
-      setIsDownloading(false);
-      setDownloadProgress(100);
-      setWhisperModelExists(true);
-    });
-
-    const unlistenError = listen<string>("download-error", (event) => {
-      setIsDownloading(false);
-      setDownloadProgress(0);
-      alert(`Download failed: ${event.payload}`);
-    });
-
-    return () => {
-      unlistenProgress.then((fn) => fn());
-      unlistenComplete.then((fn) => fn());
-      unlistenError.then((fn) => fn());
-    };
-  }, []);
 
   // Track if we need to process after Whisper completes
   const pendingWhisperProcessingRef = useRef(false);
@@ -184,15 +177,12 @@ function App() {
   // Listen for whisper processing events
   useEffect(() => {
     const unlisten = listen<boolean>("whisper-processing", (event) => {
-      // When Whisper processing completes, handle typing and LLM
       if (!event.payload && pendingWhisperProcessingRef.current) {
         pendingWhisperProcessingRef.current = false;
 
-        // Small delay to ensure state is updated
         setTimeout(async () => {
           const textToType = finalTextRef.current;
           if (textToType) {
-            // Type transcription if that's what user selected
             if (localStorage.getItem("type_output") === "transcription") {
               try {
                 await invoke("type_text", { text: textToType });
@@ -200,14 +190,15 @@ function App() {
                 console.error("Failed to type text:", err);
               }
             }
-            // Process with LLM via Rust backend (if enabled)
-            const storedOpenRouterKey = localStorage.getItem("openrouter_api_key");
-            const isLlmEnabled = localStorage.getItem("llm_enabled") !== "false";
+            const storedOpenRouterKey =
+              localStorage.getItem("openrouter_api_key");
+            const isLlmEnabled =
+              localStorage.getItem("llm_enabled") !== "false";
             if (isLlmEnabled && storedOpenRouterKey?.trim()) {
               try {
                 await invoke("process_with_llm", {
                   transcription: textToType,
-                  shouldType: localStorage.getItem("type_output") === "llm"
+                  shouldType: localStorage.getItem("type_output") === "llm",
                 });
               } catch (err) {
                 console.error("Failed to process with LLM:", err);
@@ -263,31 +254,6 @@ function App() {
     };
   }, []);
 
-  // Theme handling
-  useEffect(() => {
-    const root = document.documentElement;
-    let intervalId: number | undefined;
-
-    const applyTheme = async () => {
-      if (theme === "system") {
-        const systemTheme = await invoke<string>("get_system_theme");
-        root.setAttribute("data-theme", systemTheme);
-      } else {
-        root.setAttribute("data-theme", theme);
-      }
-    };
-
-    applyTheme();
-
-    if (theme === "system") {
-      intervalId = window.setInterval(applyTheme, 5000);
-    }
-
-    return () => {
-      if (intervalId) clearInterval(intervalId);
-    };
-  }, [theme]);
-
   // Real-time waveform visualization during recording
   const startRealTimeWaveform = useCallback(async () => {
     try {
@@ -319,8 +285,8 @@ function App() {
 
         ctx.clearRect(0, 0, width, height);
 
-        const isDark = document.documentElement.getAttribute("data-theme") === "dark";
-        const barColor = isDark ? "#24c8db" : "#396cd8";
+        const isDark = document.documentElement.classList.contains("dark");
+        const barColor = isDark ? "hsl(186, 100%, 50%)" : "hsl(221, 83%, 53%)";
 
         // Draw waveform as bars
         const barWidth = 3;
@@ -356,7 +322,7 @@ function App() {
       animationRef.current = null;
     }
     if (microphoneRef.current) {
-      microphoneRef.current.getTracks().forEach(track => track.stop());
+      microphoneRef.current.getTracks().forEach((track) => track.stop());
       microphoneRef.current = null;
     }
     if (audioContextRef.current) {
@@ -388,18 +354,6 @@ function App() {
     };
   }, [isRecording, startRealTimeWaveform, stopRealTimeWaveform]);
 
-  // Download whisper model
-  const downloadWhisperModel = async () => {
-    setIsDownloading(true);
-    setDownloadProgress(0);
-    try {
-      await invoke("download_whisper_model");
-    } catch (err: any) {
-      setIsDownloading(false);
-      alert(`Could not start download: ${err}`);
-    }
-  };
-
   // Start recording
   const startRecording = async () => {
     if (sttService === "deepgram" && !apiKey.trim()) {
@@ -415,13 +369,15 @@ function App() {
     try {
       setFinalText("");
 
-      // Enable real-time typing for Deepgram when enabled and typeOutput is "transcription"
-      const shouldAutoType = sttService === "deepgram" && typeOutput === "transcription" && realTimeTypingEnabled;
+      const shouldAutoType =
+        sttService === "deepgram" &&
+        typeOutput === "transcription" &&
+        realTimeTypingEnabled;
       await invoke("set_auto_type_transcription", { enabled: shouldAutoType });
 
       await invoke("start_recording");
       setIsRecording(true);
-    } catch (err: any) {
+    } catch (err) {
       alert(`Could not start recording: ${err}`);
     }
   };
@@ -432,15 +388,12 @@ function App() {
       await invoke<string>("stop_recording");
       setIsRecording(false);
 
-      // For Whisper mode, set flag to process when transcription completes
       if (sttService === "whisper") {
         pendingWhisperProcessingRef.current = true;
       } else {
-        // For Deepgram, wait briefly for any final transcription events, then process
         setTimeout(async () => {
           const textToType = finalTextRef.current;
           if (textToType) {
-            // Type transcription after stop if real-time typing was disabled
             if (typeOutput === "transcription" && !realTimeTypingEnabled) {
               try {
                 await invoke("type_text", { text: textToType });
@@ -448,12 +401,11 @@ function App() {
                 console.error("Failed to type text:", err);
               }
             }
-            // Process with LLM via Rust backend (will type if typeOutput is "llm")
             if (llmEnabled && openRouterApiKey.trim()) {
               try {
                 await invoke("process_with_llm", {
                   transcription: textToType,
-                  shouldType: typeOutput === "llm"
+                  shouldType: typeOutput === "llm",
                 });
               } catch (err) {
                 console.error("Failed to process with LLM:", err);
@@ -462,7 +414,7 @@ function App() {
           }
         }, 200);
       }
-    } catch (err: any) {
+    } catch (err) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);
     }
@@ -480,41 +432,47 @@ function App() {
   // Keep ref updated for D-Bus listener
   handleRecordRef.current = handleRecord;
 
-  function cycleTheme() {
-    setTheme((prev) => {
-      if (prev === "system") return "light";
-      if (prev === "light") return "dark";
-      return "system";
-    });
-  }
-
   const handleDrag = () => getCurrentWindow().startDragging();
 
   return (
-    <main className="container" onContextMenu={(e) => { e.preventDefault(); setShowSettings(!showSettings); }}>
+    <main className="flex flex-col items-center justify-center h-screen w-screen relative bg-background">
       {/* Drag handle area */}
-      <div className="drag-area" onMouseDown={handleDrag} />
+      <div
+        className="absolute top-0 left-0 right-0 h-5 cursor-move z-50"
+        onMouseDown={handleDrag}
+      />
 
-      {/* Title */}
-      <div className="title-bar">
-        <span className="title-text">hyperwhisper</span>
+      {/* Header with settings button and title */}
+      <div className="absolute top-2 left-0 right-0 flex items-center justify-between px-3">
+        <SettingsDialog disabled={isRecording} />
+        <span className="text-xs text-muted-foreground font-medium tracking-wide">
+          hyperwhisper
+        </span>
+        <div className="w-8" /> {/* Spacer for balance */}
       </div>
 
       {/* Audio device selector */}
-      <div className="device-selector">
-        <select
-          className="device-dropdown"
-          value={selectedDeviceId ?? ""}
-          onChange={(e) => setSelectedDeviceId(e.target.value ? parseInt(e.target.value, 10) : null)}
+      <div className="mb-3 w-full max-w-[280px]">
+        <Select
+          value={selectedDeviceId?.toString() ?? "auto"}
+          onValueChange={(v) =>
+            setSelectedDeviceId(v === "auto" ? null : parseInt(v, 10))
+          }
           disabled={isRecording}
         >
-          <option value="">Auto</option>
-          {audioDevices.map((device) => (
-            <option key={device.id} value={device.id}>
-              {device.name}{device.is_default ? " *" : ""}
-            </option>
-          ))}
-        </select>
+          <SelectTrigger className="h-8 text-xs">
+            <SelectValue placeholder="Auto" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="auto">Auto</SelectItem>
+            {audioDevices.map((device) => (
+              <SelectItem key={device.id} value={device.id.toString()}>
+                {device.name}
+                {device.is_default ? " *" : ""}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Waveform canvas */}
@@ -522,138 +480,26 @@ function App() {
         ref={canvasRef}
         width={600}
         height={40}
-        className="waveform-canvas"
+        className="w-[600px] h-[40px] mb-3"
       />
 
-      {/* Controls */}
-      <div className="controls">
-        <button
-          className={`record-btn ${isRecording ? "recording" : ""}`}
-          onClick={isRecording ? stopRecording : startRecording}
-        >
-          <div className="record-icon">
-            {isRecording ? (
-              <div className="stop-icon" />
-            ) : (
-              <div className="mic-icon">
-                <div className="mic-body" />
-                <div className="mic-stand" />
-              </div>
-            )}
-          </div>
-        </button>
-      </div>
-
-      {/* Settings panel - accessible via right-click */}
-      {showSettings && !isRecording && (
-        <div className="settings-panel">
-          <div className="settings-section">
-            <label>STT Service</label>
-            <div className="toggle-group">
-              <button
-                className={`toggle-btn ${sttService === "deepgram" ? "active" : ""}`}
-                onClick={() => setSttService("deepgram")}
-              >
-                Deepgram
-              </button>
-              <button
-                className={`toggle-btn ${sttService === "whisper" ? "active" : ""}`}
-                onClick={() => setSttService("whisper")}
-              >
-                Whisper
-              </button>
-            </div>
-          </div>
-
-          {sttService === "whisper" && (
-            <div className="settings-section">
-              {whisperModelExists === null ? (
-                <span>Checking model...</span>
-              ) : whisperModelExists ? (
-                <span className="status-ready">Model ready</span>
-              ) : isDownloading ? (
-                <div className="download-progress">
-                  <div className="progress-bar">
-                    <div className="progress-fill" style={{ width: `${downloadProgress}%` }} />
-                  </div>
-                  <span>{downloadProgress.toFixed(1)}%</span>
-                </div>
-              ) : (
-                <button className="download-btn" onClick={downloadWhisperModel}>
-                  Download Model
-                </button>
-              )}
-            </div>
-          )}
-
-          <div className="settings-section">
-            <label>Audio Device</label>
-            <select
-              className="select-field"
-              value={selectedDeviceId ?? ""}
-              onChange={(e) => setSelectedDeviceId(e.target.value ? parseInt(e.target.value, 10) : null)}
-            >
-              <option value="">Auto-select</option>
-              {audioDevices.map((device) => (
-                <option key={device.id} value={device.id}>
-                  {device.name}{device.is_default ? " (default)" : ""}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="settings-section">
-            <label>Deepgram API Key</label>
-            <input
-              type="password"
-              value={apiKey}
-              onChange={(e) => setApiKey(e.target.value)}
-              placeholder="Enter API key"
-              className="input-field"
-            />
-          </div>
-
-          <div className="settings-section">
-            <label>OpenRouter API Key</label>
-            <input
-              type="password"
-              value={openRouterApiKey}
-              onChange={(e) => setOpenRouterApiKey(e.target.value)}
-              placeholder="Enter API key"
-              className="input-field"
-            />
-          </div>
-
-          <div className="settings-section">
-            <label>Theme</label>
-            <button className="theme-btn" onClick={cycleTheme}>
-              {theme === "system" ? "System" : theme === "light" ? "Light" : "Dark"}
-            </button>
-          </div>
-
-          <div className="settings-section">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={realTimeTypingEnabled}
-                onChange={(e) => setRealTimeTypingEnabled(e.target.checked)}
-              />
-              Real-time typing
-            </label>
-          </div>
-
-          <div className="settings-section">
-            <label className="checkbox-label">
-              <input
-                type="checkbox"
-                checked={llmEnabled}
-                onChange={(e) => setLlmEnabled(e.target.checked)}
-              />
-              LLM processing
-            </label>
-          </div>
-        </div>
-      )}
+      {/* Record button */}
+      <Button
+        onClick={handleRecord}
+        size="lg"
+        className={cn(
+          "h-14 w-14 rounded-full transition-all duration-200",
+          isRecording
+            ? "bg-destructive hover:bg-destructive/90 animate-pulse"
+            : "bg-primary hover:bg-primary/90"
+        )}
+      >
+        {isRecording ? (
+          <Square className="h-5 w-5 fill-current" />
+        ) : (
+          <Mic className="h-5 w-5" />
+        )}
+      </Button>
     </main>
   );
 }
