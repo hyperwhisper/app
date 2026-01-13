@@ -4,36 +4,17 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SettingsDialog } from "@/components/settings-dialog";
 
-type SttService = "deepgram" | "whisper";
-
 interface TranscriptionEvent {
   text: string;
   is_final: boolean;
 }
 
-interface LlmResponseEvent {
-  text: string;
-  is_error: boolean;
-}
-
-const DEFAULT_PROMPT =
-  "You are a helpful assistant. Process the following transcription and provide a refined response:";
-
 function App() {
   const [finalText, setFinalText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
-  );
-
-  // STT service state
-  const [sttService] = useState<SttService>(
-    () => (localStorage.getItem("stt_service") as SttService) || "deepgram"
-  );
-  const [whisperModelExists, setWhisperModelExists] = useState<boolean | null>(
-    null
   );
 
   // Audio device state
@@ -42,21 +23,6 @@ function App() {
     return stored ? parseInt(stored, 10) : null;
   });
 
-  // LLM state
-  const [llmPrompt] = useState(
-    () => localStorage.getItem("llm_prompt") || DEFAULT_PROMPT
-  );
-  const [openRouterApiKey] = useState(
-    () => localStorage.getItem("openrouter_api_key") || ""
-  );
-  const [typeOutput] = useState<"transcription" | "llm">(
-    () =>
-      (localStorage.getItem("type_output") as "transcription" | "llm") ||
-      "transcription"
-  );
-  const [llmEnabled] = useState(
-    () => localStorage.getItem("llm_enabled") !== "false"
-  );
   const [autoTypeEnabled, setAutoTypeEnabled] = useState(
     () => localStorage.getItem("auto_type_enabled") !== "false"
   );
@@ -81,49 +47,9 @@ function App() {
     }
   }, [apiKey]);
 
-  // Save LLM prompt and OpenRouter API key to localStorage
-  useEffect(() => {
-    localStorage.setItem("llm_prompt", llmPrompt);
-    invoke("set_llm_prompt", { prompt: llmPrompt });
-  }, [llmPrompt]);
-
-  useEffect(() => {
-    localStorage.setItem("openrouter_api_key", openRouterApiKey);
-    if (openRouterApiKey.trim()) {
-      invoke("set_openrouter_api_key", { apiKey: openRouterApiKey });
-    }
-  }, [openRouterApiKey]);
-
-  useEffect(() => {
-    localStorage.setItem("type_output", typeOutput);
-  }, [typeOutput]);
-
-  useEffect(() => {
-    localStorage.setItem("llm_enabled", String(llmEnabled));
-  }, [llmEnabled]);
-
   useEffect(() => {
     localStorage.setItem("auto_type_enabled", String(autoTypeEnabled));
   }, [autoTypeEnabled]);
-
-  // Save STT service to localStorage and sync with backend
-  useEffect(() => {
-    localStorage.setItem("stt_service", sttService);
-    invoke("set_stt_service", { service: sttService });
-  }, [sttService]);
-
-  // Check if whisper model exists
-  useEffect(() => {
-    const checkModel = async () => {
-      try {
-        const exists = await invoke<boolean>("check_whisper_model");
-        setWhisperModelExists(exists);
-      } catch {
-        setWhisperModelExists(false);
-      }
-    };
-    checkModel();
-  }, []);
 
   // Save selected device to localStorage and sync with backend
   useEffect(() => {
@@ -138,54 +64,6 @@ function App() {
     invoke("set_selected_device", { deviceId: selectedDeviceId });
   }, [selectedDeviceId]);
 
-  // Track if we need to process after Whisper completes
-  const pendingWhisperProcessingRef = useRef(false);
-
-  // Listen for whisper processing events
-  useEffect(() => {
-    const unlisten = listen<boolean>("whisper-processing", (event) => {
-      // event.payload is true when processing starts, false when done
-      setIsProcessing(event.payload);
-
-      if (!event.payload && pendingWhisperProcessingRef.current) {
-        pendingWhisperProcessingRef.current = false;
-
-        setTimeout(async () => {
-          const textToType = finalTextRef.current;
-          const isAutoTypeEnabled =
-            localStorage.getItem("auto_type_enabled") !== "false";
-          if (textToType) {
-            if (localStorage.getItem("type_output") === "transcription" && isAutoTypeEnabled) {
-              try {
-                await invoke("type_text", { text: textToType });
-              } catch (err) {
-                console.error("Failed to type text:", err);
-              }
-            }
-            const storedOpenRouterKey =
-              localStorage.getItem("openrouter_api_key");
-            const isLlmEnabled =
-              localStorage.getItem("llm_enabled") !== "false";
-            if (isLlmEnabled && storedOpenRouterKey?.trim()) {
-              try {
-                await invoke("process_with_llm", {
-                  transcription: textToType,
-                  shouldType: localStorage.getItem("type_output") === "llm" && isAutoTypeEnabled,
-                });
-              } catch (err) {
-                console.error("Failed to process with LLM:", err);
-              }
-            }
-          }
-        }, 100);
-      }
-    });
-
-    return () => {
-      unlisten.then((fn) => fn());
-    };
-  }, []);
-
   // Listen for transcription events from backend
   useEffect(() => {
     const unlisten = listen<TranscriptionEvent>("transcription", (event) => {
@@ -198,17 +76,6 @@ function App() {
 
     return () => {
       unlisten.then((fn) => fn());
-    };
-  }, []);
-
-  // Listen for LLM events from backend
-  useEffect(() => {
-    const unlistenResponse = listen<LlmResponseEvent>("llm-response", () => {
-      // LLM processing complete
-    });
-
-    return () => {
-      unlistenResponse.then((fn) => fn());
     };
   }, []);
 
@@ -337,24 +204,15 @@ function App() {
 
   // Start recording
   const startRecording = async () => {
-    if (sttService === "deepgram" && !apiKey.trim()) {
+    if (!apiKey.trim()) {
       alert("Please enter your Deepgram API key first");
-      return;
-    }
-
-    if (sttService === "whisper" && !whisperModelExists) {
-      alert("Please download the Whisper model first");
       return;
     }
 
     try {
       setFinalText("");
 
-      const shouldAutoType =
-        sttService === "deepgram" &&
-        typeOutput === "transcription" &&
-        autoTypeEnabled;
-      await invoke("set_auto_type_transcription", { enabled: shouldAutoType });
+      await invoke("set_auto_type_transcription", { enabled: autoTypeEnabled });
 
       await invoke("start_recording");
       setIsRecording(true);
@@ -368,27 +226,6 @@ function App() {
     try {
       await invoke<string>("stop_recording");
       setIsRecording(false);
-
-      if (sttService === "whisper") {
-        pendingWhisperProcessingRef.current = true;
-      } else {
-        setTimeout(async () => {
-          const textToType = finalTextRef.current;
-          if (textToType) {
-            // LLM processing (if enabled)
-            if (llmEnabled && openRouterApiKey.trim()) {
-              try {
-                await invoke("process_with_llm", {
-                  transcription: textToType,
-                  shouldType: typeOutput === "llm" && autoTypeEnabled,
-                });
-              } catch (err) {
-                console.error("Failed to process with LLM:", err);
-              }
-            }
-          }
-        }, 200);
-      }
     } catch (err) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);
@@ -411,7 +248,7 @@ function App() {
 
   return (
     <main
-      className="flex flex-col h-screen w-screen relative bg-neutral-800/80 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl overflow-hidden"
+      className="flex flex-col h-screen w-screen relative bg-neutral-800/80 backdrop-blur-2xl rounded-2xl shadow-xl overflow-hidden"
       onMouseDown={handleDrag}
     >
       {/* Waveform area */}
@@ -425,12 +262,6 @@ function App() {
                 style={{ height: '100%' }}
               />
             ))}
-          </div>
-        ) : isProcessing ? (
-          <div className="px-4 w-full max-h-[100px] overflow-y-auto">
-            <p className="text-sm text-white/50 text-center leading-relaxed animate-pulse">
-              {finalText || "Processing..."}
-            </p>
           </div>
         ) : finalText ? (
           <div className="px-4 w-full max-h-[100px] overflow-y-auto">
@@ -478,7 +309,7 @@ function App() {
       </div>
 
       {/* Bottom bar */}
-      <div className="h-14 bg-neutral-900/80 border-t border-white/10 flex items-center justify-between px-4">
+      <div className="h-14 bg-neutral-900/80 flex items-center justify-between px-4">
         {/* Left: Recording status */}
         <div className="flex items-center gap-2">
           {isRecording ? (
@@ -486,14 +317,9 @@ function App() {
               <div className="w-4 h-4 rounded-sm bg-red-500 animate-pulse" />
               <span className="text-white font-medium text-sm">Recording</span>
             </>
-          ) : isProcessing ? (
-            <>
-              <div className="w-4 h-4 rounded-sm bg-yellow-500 animate-pulse" />
-              <span className="text-white font-medium text-sm">Processing</span>
-            </>
           ) : (
             <>
-              <SettingsDialog disabled={isRecording || isProcessing} />
+              <SettingsDialog disabled={isRecording} />
               <span className="text-white/60 text-sm">Ready</span>
             </>
           )}
@@ -508,9 +334,9 @@ function App() {
               e.preventDefault();
               setAutoTypeEnabled(!autoTypeEnabled);
             }}
-            disabled={isRecording || isProcessing}
+            disabled={isRecording}
             className={`flex items-center gap-1.5 text-xs transition-colors ${
-              isRecording || isProcessing
+              isRecording
                 ? "opacity-50 cursor-not-allowed"
                 : "hover:text-white/80"
             } ${autoTypeEnabled ? "text-white/80" : "text-white/40"}`}
@@ -546,8 +372,7 @@ function App() {
                 e.preventDefault();
                 handleRecord();
               }}
-              disabled={isProcessing}
-              className={`p-2 rounded-md transition-colors ${isProcessing ? "opacity-50 cursor-not-allowed" : "text-white/80 hover:text-white hover:bg-white/10"}`}
+              className="p-2 rounded-md transition-colors text-white/80 hover:text-white hover:bg-white/10"
               title="Start recording"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
