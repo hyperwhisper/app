@@ -421,21 +421,13 @@ function App() {
       <div className="flex-1 flex items-center justify-center px-8">
         {isRecording ? (
           <div className="flex items-center justify-center gap-[3px] h-[60px] w-full">
-            {[...Array(80)].map((_, i) => {
-              // More varied initial scales that look like mid-animation
-              const initialScales = [0.35, 0.6, 0.25, 0.8, 0.45, 0.7, 0.3, 0.55, 0.9, 0.4, 0.65, 0.2, 0.75, 0.5];
-              return (
-                <div
-                  key={i}
-                  className={`w-[2px] bg-white/70 rounded-full animate-sound-bar-${(i % 5) + 1}`}
-                  style={{
-                    animationDelay: `${(i * 0.03) + (i % 7) * 0.05}s`,
-                    height: '100%',
-                    transform: `scaleY(${initialScales[i % 14]})`,
-                  }}
-                />
-              );
-            })}
+            {[...Array(80)].map((_, i) => (
+              <div
+                key={i}
+                className={`w-[2px] bg-white/70 rounded-full sb${(i % 16) + 1}`}
+                style={{ height: '100%' }}
+              />
+            ))}
           </div>
         ) : finalText ? (
           <div className="px-4 w-full max-h-[100px] overflow-y-auto">

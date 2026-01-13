@@ -77,49 +77,39 @@
   border-color: var(--border);
 }
 
-@keyframes sound-bar-1 {
-  0%, 100% { transform: scaleY(0.15); }
-  25% { transform: scaleY(0.7); }
-  50% { transform: scaleY(0.4); }
-  75% { transform: scaleY(0.9); }
-}
+@keyframes sb1 { 0%,100%{transform:scaleY(.42)} 23%{transform:scaleY(.91)} 54%{transform:scaleY(.28)} 79%{transform:scaleY(.67)} }
+@keyframes sb2 { 0%,100%{transform:scaleY(.71)} 17%{transform:scaleY(.33)} 41%{transform:scaleY(.88)} 68%{transform:scaleY(.52)} }
+@keyframes sb3 { 0%,100%{transform:scaleY(.29)} 31%{transform:scaleY(.76)} 59%{transform:scaleY(.44)} 82%{transform:scaleY(.93)} }
+@keyframes sb4 { 0%,100%{transform:scaleY(.58)} 14%{transform:scaleY(.95)} 38%{transform:scaleY(.31)} 61%{transform:scaleY(.73)} 85%{transform:scaleY(.47)} }
+@keyframes sb5 { 0%,100%{transform:scaleY(.83)} 22%{transform:scaleY(.39)} 47%{transform:scaleY(.69)} 73%{transform:scaleY(.24)} }
+@keyframes sb6 { 0%,100%{transform:scaleY(.36)} 19%{transform:scaleY(.82)} 43%{transform:scaleY(.55)} 71%{transform:scaleY(.97)} 89%{transform:scaleY(.41)} }
+@keyframes sb7 { 0%,100%{transform:scaleY(.64)} 27%{transform:scaleY(.21)} 52%{transform:scaleY(.79)} 78%{transform:scaleY(.46)} }
+@keyframes sb8 { 0%,100%{transform:scaleY(.47)} 16%{transform:scaleY(.86)} 34%{transform:scaleY(.32)} 58%{transform:scaleY(.71)} 81%{transform:scaleY(.53)} }
+@keyframes sb9 { 0%,100%{transform:scaleY(.77)} 21%{transform:scaleY(.43)} 49%{transform:scaleY(.92)} 74%{transform:scaleY(.35)} }
+@keyframes sb10 { 0%,100%{transform:scaleY(.33)} 13%{transform:scaleY(.68)} 37%{transform:scaleY(.89)} 62%{transform:scaleY(.27)} 86%{transform:scaleY(.74)} }
+@keyframes sb11 { 0%,100%{transform:scaleY(.56)} 29%{transform:scaleY(.94)} 53%{transform:scaleY(.38)} 77%{transform:scaleY(.66)} }
+@keyframes sb12 { 0%,100%{transform:scaleY(.81)} 18%{transform:scaleY(.29)} 44%{transform:scaleY(.63)} 69%{transform:scaleY(.96)} 91%{transform:scaleY(.51)} }
+@keyframes sb13 { 0%,100%{transform:scaleY(.24)} 26%{transform:scaleY(.72)} 51%{transform:scaleY(.45)} 76%{transform:scaleY(.87)} }
+@keyframes sb14 { 0%,100%{transform:scaleY(.69)} 15%{transform:scaleY(.34)} 39%{transform:scaleY(.91)} 64%{transform:scaleY(.48)} 88%{transform:scaleY(.76)} }
+@keyframes sb15 { 0%,100%{transform:scaleY(.52)} 24%{transform:scaleY(.85)} 48%{transform:scaleY(.31)} 72%{transform:scaleY(.68)} }
+@keyframes sb16 { 0%,100%{transform:scaleY(.38)} 12%{transform:scaleY(.79)} 36%{transform:scaleY(.54)} 59%{transform:scaleY(.93)} 83%{transform:scaleY(.42)} }
 
-@keyframes sound-bar-2 {
-  0%, 100% { transform: scaleY(0.3); }
-  20% { transform: scaleY(1); }
-  40% { transform: scaleY(0.2); }
-  60% { transform: scaleY(0.6); }
-  80% { transform: scaleY(0.35); }
-}
-
-@keyframes sound-bar-3 {
-  0%, 100% { transform: scaleY(0.5); }
-  30% { transform: scaleY(0.15); }
-  50% { transform: scaleY(0.85); }
-  70% { transform: scaleY(0.25); }
-}
-
-@keyframes sound-bar-4 {
-  0%, 100% { transform: scaleY(0.25); }
-  15% { transform: scaleY(0.6); }
-  35% { transform: scaleY(0.9); }
-  55% { transform: scaleY(0.3); }
-  75% { transform: scaleY(0.75); }
-}
-
-@keyframes sound-bar-5 {
-  0%, 100% { transform: scaleY(0.4); }
-  20% { transform: scaleY(0.2); }
-  45% { transform: scaleY(1); }
-  65% { transform: scaleY(0.35); }
-  85% { transform: scaleY(0.7); }
-}
-
-.animate-sound-bar-1 { animation: sound-bar-1 1.2s ease-in-out infinite both; transform-origin: center; }
-.animate-sound-bar-2 { animation: sound-bar-2 0.9s ease-in-out infinite both; transform-origin: center; }
-.animate-sound-bar-3 { animation: sound-bar-3 1.1s ease-in-out infinite both; transform-origin: center; }
-.animate-sound-bar-4 { animation: sound-bar-4 0.85s ease-in-out infinite both; transform-origin: center; }
-.animate-sound-bar-5 { animation: sound-bar-5 1.0s ease-in-out infinite both; transform-origin: center; }
+.sb1{animation:sb1 2.31s linear infinite;transform-origin:center}
+.sb2{animation:sb2 1.87s linear infinite;transform-origin:center}
+.sb3{animation:sb3 2.73s linear infinite;transform-origin:center}
+.sb4{animation:sb4 1.53s linear infinite;transform-origin:center}
+.sb5{animation:sb5 2.17s linear infinite;transform-origin:center}
+.sb6{animation:sb6 1.79s linear infinite;transform-origin:center}
+.sb7{animation:sb7 2.41s linear infinite;transform-origin:center}
+.sb8{animation:sb8 1.67s linear infinite;transform-origin:center}
+.sb9{animation:sb9 2.03s linear infinite;transform-origin:center}
+.sb10{animation:sb10 1.91s linear infinite;transform-origin:center}
+.sb11{animation:sb11 2.59s linear infinite;transform-origin:center}
+.sb12{animation:sb12 1.43s linear infinite;transform-origin:center}
+.sb13{animation:sb13 2.29s linear infinite;transform-origin:center}
+.sb14{animation:sb14 1.61s linear infinite;transform-origin:center}
+.sb15{animation:sb15 2.11s linear infinite;transform-origin:center}
+.sb16{animation:sb16 1.97s linear infinite;transform-origin:center}
 
 html, body {
   background-color: transparent;
