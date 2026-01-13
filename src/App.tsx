@@ -414,7 +414,7 @@ function App() {
 
   return (
     <main
-      className="flex flex-col h-screen w-screen relative bg-neutral-800/70 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl overflow-hidden"
+      className="flex flex-col h-screen w-screen relative bg-neutral-800/80 backdrop-blur-2xl rounded-2xl border border-white/10 shadow-xl overflow-hidden"
       onMouseDown={handleDrag}
     >
       {/* Waveform area */}
@@ -477,7 +477,6 @@ function App() {
               >
                 Stop
               </Button>
-              <span className="text-white/30 text-xs bg-white/10 px-2 py-1 rounded">⌥Space</span>
             </>
           ) : (
             <>
@@ -489,7 +488,6 @@ function App() {
               >
                 Record
               </Button>
-              <span className="text-white/30 text-xs bg-white/10 px-2 py-1 rounded">⌥Space</span>
             </>
           )}
         </div>
