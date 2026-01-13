@@ -2,12 +2,11 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Settings, Sun, Moon, Monitor, Download, X } from "lucide-react";
+import { Settings, Download, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
-import { Separator } from "@/components/ui/separator";
 import { Progress } from "@/components/ui/progress";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -17,13 +16,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { useTheme } from "@/components/theme-provider";
 
 interface WpDevice {
   id: number;
@@ -38,8 +30,6 @@ interface DownloadProgressEvent {
 }
 
 export function SettingsPage() {
-  const { theme, setTheme } = useTheme();
-
   // STT service state
   const [sttService, setSttService] = useState<"deepgram" | "whisper">(
     () => (localStorage.getItem("stt_service") as "deepgram" | "whisper") || "deepgram"
@@ -173,7 +163,7 @@ export function SettingsPage() {
   const handleDrag = () => getCurrentWindow().startDragging();
 
   return (
-    <main className="flex flex-col h-screen w-screen bg-background">
+    <main className="flex flex-col h-[calc(100vh-16px)] w-[calc(100vw-16px)] m-2 bg-[#171717] rounded-2xl shadow-2xl overflow-hidden">
       {/* Drag handle area */}
       <div
         className="absolute top-0 left-0 right-0 h-5 cursor-move z-50"
@@ -181,15 +171,15 @@ export function SettingsPage() {
       />
 
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b">
+      <div className="flex items-center justify-between px-4 py-3">
         <div className="flex items-center gap-2">
-          <Settings className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-lg font-semibold">Settings</h1>
+          <Settings className="h-5 w-5 text-white/60" />
+          <h1 className="text-lg font-semibold text-white">Settings</h1>
         </div>
         <Button
           variant="ghost"
           size="icon"
-          className="h-8 w-8"
+          className="h-8 w-8 text-white/60 hover:text-white hover:bg-white/10"
           onClick={handleClose}
         >
           <X className="h-4 w-4" />
@@ -198,10 +188,10 @@ export function SettingsPage() {
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
-        <div className="space-y-6 max-w-md mx-auto">
+        <div className="space-y-5 max-w-md mx-auto">
           {/* STT Service */}
           <div className="space-y-2">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+            <Label className="text-xs uppercase tracking-wide text-white/50">
               STT Service
             </Label>
             <Tabs
@@ -209,26 +199,26 @@ export function SettingsPage() {
               onValueChange={(v) => setSttService(v as "deepgram" | "whisper")}
               className="w-full"
             >
-              <TabsList className="grid w-full grid-cols-2">
-                <TabsTrigger value="deepgram">Deepgram</TabsTrigger>
-                <TabsTrigger value="whisper">Whisper</TabsTrigger>
+              <TabsList className="grid w-full grid-cols-2 bg-white/5 border-0">
+                <TabsTrigger value="deepgram" className="data-[state=active]:bg-white/15 data-[state=active]:text-white text-white/50 border-0">Deepgram</TabsTrigger>
+                <TabsTrigger value="whisper" className="data-[state=active]:bg-white/15 data-[state=active]:text-white text-white/50 border-0">Whisper</TabsTrigger>
               </TabsList>
             </Tabs>
 
             {sttService === "whisper" && (
               <div className="mt-3">
                 {whisperModelExists === null ? (
-                  <span className="text-sm text-muted-foreground">
+                  <span className="text-sm text-white/50">
                     Checking model...
                   </span>
                 ) : whisperModelExists ? (
-                  <span className="text-sm text-green-500 font-medium">
+                  <span className="text-sm text-green-400 font-medium">
                     Model ready
                   </span>
                 ) : isDownloading ? (
                   <div className="space-y-2">
-                    <Progress value={downloadProgress} />
-                    <span className="text-xs text-muted-foreground">
+                    <Progress value={downloadProgress} className="bg-white/5" />
+                    <span className="text-xs text-white/50">
                       {downloadProgress.toFixed(1)}%
                     </span>
                   </div>
@@ -236,7 +226,7 @@ export function SettingsPage() {
                   <Button
                     onClick={downloadWhisperModel}
                     size="sm"
-                    className="w-full"
+                    className="w-full bg-white/10 hover:bg-white/15 text-white border-0"
                   >
                     <Download className="mr-2 h-4 w-4" />
                     Download Model
@@ -246,11 +236,9 @@ export function SettingsPage() {
             )}
           </div>
 
-          <Separator />
-
           {/* Audio Device */}
           <div className="space-y-2">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">
+            <Label className="text-xs uppercase tracking-wide text-white/50">
               Audio Device
             </Label>
             <Select
@@ -259,13 +247,13 @@ export function SettingsPage() {
                 setSelectedDeviceId(v === "auto" ? null : parseInt(v, 10))
               }
             >
-              <SelectTrigger>
+              <SelectTrigger className="bg-white/5 border-0 text-white">
                 <SelectValue placeholder="Auto-select" />
               </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="auto">Auto-select</SelectItem>
+              <SelectContent className="bg-neutral-800/95 backdrop-blur-xl border-0">
+                <SelectItem value="auto" className="text-white/80 focus:bg-white/10 focus:text-white">Auto-select</SelectItem>
                 {audioDevices.map((device) => (
-                  <SelectItem key={device.id} value={device.id.toString()}>
+                  <SelectItem key={device.id} value={device.id.toString()} className="text-white/80 focus:bg-white/10 focus:text-white">
                     {device.name}
                     {device.is_default ? " (default)" : ""}
                   </SelectItem>
@@ -274,14 +262,12 @@ export function SettingsPage() {
             </Select>
           </div>
 
-          <Separator />
-
           {/* API Keys */}
-          <div className="space-y-4">
+          <div className="space-y-3">
             <div className="space-y-2">
               <Label
                 htmlFor="deepgram-key"
-                className="text-xs uppercase tracking-wide text-muted-foreground"
+                className="text-xs uppercase tracking-wide text-white/50"
               >
                 Deepgram API Key
               </Label>
@@ -291,13 +277,14 @@ export function SettingsPage() {
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
                 placeholder="Enter API key"
+                className="bg-white/5 border-0 text-white placeholder:text-white/30"
               />
             </div>
 
             <div className="space-y-2">
               <Label
                 htmlFor="openrouter-key"
-                className="text-xs uppercase tracking-wide text-muted-foreground"
+                className="text-xs uppercase tracking-wide text-white/50"
               >
                 OpenRouter API Key
               </Label>
@@ -307,60 +294,24 @@ export function SettingsPage() {
                 value={openRouterApiKey}
                 onChange={(e) => setOpenRouterApiKey(e.target.value)}
                 placeholder="Enter API key"
+                className="bg-white/5 border-0 text-white placeholder:text-white/30"
               />
             </div>
           </div>
-
-          <Separator />
 
           {/* Toggles */}
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label
-                htmlFor="llm-processing"
-                className="text-sm font-normal cursor-pointer"
-              >
-                LLM processing
-              </Label>
-              <Switch
-                id="llm-processing"
-                checked={llmEnabled}
-                onCheckedChange={setLlmEnabled}
-              />
-            </div>
-          </div>
-
-          <Separator />
-
-          {/* Theme */}
-          <div className="flex items-center justify-between">
-            <Label className="text-xs uppercase tracking-wide text-muted-foreground">
-              Theme
+          <div className="flex items-center justify-between py-1">
+            <Label
+              htmlFor="llm-processing"
+              className="text-sm font-normal cursor-pointer text-white/80"
+            >
+              LLM processing
             </Label>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="sm" className="gap-2">
-                  {theme === "light" && <Sun className="h-4 w-4" />}
-                  {theme === "dark" && <Moon className="h-4 w-4" />}
-                  {theme === "system" && <Monitor className="h-4 w-4" />}
-                  <span className="capitalize">{theme}</span>
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onClick={() => setTheme("light")}>
-                  <Sun className="mr-2 h-4 w-4" />
-                  Light
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme("dark")}>
-                  <Moon className="mr-2 h-4 w-4" />
-                  Dark
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => setTheme("system")}>
-                  <Monitor className="mr-2 h-4 w-4" />
-                  System
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Switch
+              id="llm-processing"
+              checked={llmEnabled}
+              onCheckedChange={setLlmEnabled}
+            />
           </div>
         </div>
       </div>

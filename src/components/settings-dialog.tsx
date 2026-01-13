@@ -20,10 +20,12 @@ export function SettingsDialog({ disabled = false }: SettingsDialogProps) {
       url: "/settings",
       title: "Settings",
       width: 450,
-      height: 580,
+      height: 550,
       decorations: false,
       center: true,
       resizable: false,
+      transparent: true,
+      backgroundColor: [0, 0, 0, 0],
     });
 
     settingsWindow.once("tauri://error", (e) => {
