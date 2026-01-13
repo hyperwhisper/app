@@ -180,7 +180,6 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
                 continue;
             }
 
-            let is_default = trimmed.starts_with('*');
             let trimmed = trimmed.trim_start_matches(|c| c == '*' || c == ' ');
 
             if let Some(dot_pos) = trimmed.find(". ") {
@@ -199,13 +198,15 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
                         }
 
                         // Create user-friendly name
-                        let friendly_name = if name.to_lowercase().contains("digital microphone") {
+                        // Built-in microphone (Digital Microphone) is always marked as default
+                        let is_builtin = name.to_lowercase().contains("digital microphone");
+                        let friendly_name = if is_builtin {
                             "Built-in Microphone".to_string()
                         } else {
                             name.clone()
                         };
 
-                        devices.push(WpDevice { id, name: friendly_name, is_default });
+                        devices.push(WpDevice { id, name: friendly_name, is_default: is_builtin });
                     }
                 }
             }
