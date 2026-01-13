@@ -58,8 +58,8 @@ function App() {
   const [llmEnabled] = useState(
     () => localStorage.getItem("llm_enabled") !== "false"
   );
-  const [realTimeTypingEnabled] = useState(
-    () => localStorage.getItem("realtime_typing_enabled") !== "false"
+  const [autoTypeEnabled, setAutoTypeEnabled] = useState(
+    () => localStorage.getItem("auto_type_enabled") !== "false"
   );
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -104,11 +104,8 @@ function App() {
   }, [llmEnabled]);
 
   useEffect(() => {
-    localStorage.setItem(
-      "realtime_typing_enabled",
-      String(realTimeTypingEnabled)
-    );
-  }, [realTimeTypingEnabled]);
+    localStorage.setItem("auto_type_enabled", String(autoTypeEnabled));
+  }, [autoTypeEnabled]);
 
   // Save STT service to localStorage and sync with backend
   useEffect(() => {
@@ -156,8 +153,10 @@ function App() {
 
         setTimeout(async () => {
           const textToType = finalTextRef.current;
+          const isAutoTypeEnabled =
+            localStorage.getItem("auto_type_enabled") !== "false";
           if (textToType) {
-            if (localStorage.getItem("type_output") === "transcription") {
+            if (localStorage.getItem("type_output") === "transcription" && isAutoTypeEnabled) {
               try {
                 await invoke("type_text", { text: textToType });
               } catch (err) {
@@ -172,7 +171,7 @@ function App() {
               try {
                 await invoke("process_with_llm", {
                   transcription: textToType,
-                  shouldType: localStorage.getItem("type_output") === "llm",
+                  shouldType: localStorage.getItem("type_output") === "llm" && isAutoTypeEnabled,
                 });
               } catch (err) {
                 console.error("Failed to process with LLM:", err);
@@ -355,7 +354,7 @@ function App() {
       const shouldAutoType =
         sttService === "deepgram" &&
         typeOutput === "transcription" &&
-        realTimeTypingEnabled;
+        autoTypeEnabled;
       await invoke("set_auto_type_transcription", { enabled: shouldAutoType });
 
       await invoke("start_recording");
@@ -377,18 +376,12 @@ function App() {
         setTimeout(async () => {
           const textToType = finalTextRef.current;
           if (textToType) {
-            if (typeOutput === "transcription" && !realTimeTypingEnabled) {
-              try {
-                await invoke("type_text", { text: textToType });
-              } catch (err) {
-                console.error("Failed to type text:", err);
-              }
-            }
+            // LLM processing (if enabled)
             if (llmEnabled && openRouterApiKey.trim()) {
               try {
                 await invoke("process_with_llm", {
                   transcription: textToType,
-                  shouldType: typeOutput === "llm",
+                  shouldType: typeOutput === "llm" && autoTypeEnabled,
                 });
               } catch (err) {
                 console.error("Failed to process with LLM:", err);
@@ -508,7 +501,31 @@ function App() {
         </div>
 
         {/* Right: Controls */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Auto-type toggle */}
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              setAutoTypeEnabled(!autoTypeEnabled);
+            }}
+            disabled={isRecording || isProcessing}
+            className={`flex items-center gap-1.5 text-xs transition-colors ${
+              isRecording || isProcessing
+                ? "opacity-50 cursor-not-allowed"
+                : "hover:text-white/80"
+            } ${autoTypeEnabled ? "text-white/80" : "text-white/40"}`}
+            title={autoTypeEnabled ? "Auto-type enabled" : "Auto-type disabled"}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="2" y="4" width="20" height="16" rx="2"/>
+              <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>
+            </svg>
+            <div className={`w-6 h-3 rounded-full transition-colors ${autoTypeEnabled ? "bg-green-500" : "bg-white/20"}`}>
+              <div className={`w-2.5 h-2.5 rounded-full bg-white mt-[1px] transition-transform ${autoTypeEnabled ? "translate-x-3" : "translate-x-0.5"}`} />
+            </div>
+          </button>
+
           {isRecording ? (
             <Button
               onClick={handleRecord}

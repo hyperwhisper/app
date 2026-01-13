@@ -64,9 +64,6 @@ export function SettingsPage() {
   );
 
   // Toggles
-  const [realTimeTypingEnabled, setRealTimeTypingEnabled] = useState(
-    () => localStorage.getItem("realtime_typing_enabled") !== "false"
-  );
   const [llmEnabled, setLlmEnabled] = useState(
     () => localStorage.getItem("llm_enabled") !== "false"
   );
@@ -94,10 +91,6 @@ export function SettingsPage() {
   useEffect(() => {
     localStorage.setItem("llm_enabled", String(llmEnabled));
   }, [llmEnabled]);
-
-  useEffect(() => {
-    localStorage.setItem("realtime_typing_enabled", String(realTimeTypingEnabled));
-  }, [realTimeTypingEnabled]);
 
   useEffect(() => {
     if (selectedDeviceId !== null) {
@@ -322,20 +315,6 @@ export function SettingsPage() {
 
           {/* Toggles */}
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <Label
-                htmlFor="realtime-typing"
-                className="text-sm font-normal cursor-pointer"
-              >
-                Real-time typing
-              </Label>
-              <Switch
-                id="realtime-typing"
-                checked={realTimeTypingEnabled}
-                onCheckedChange={setRealTimeTypingEnabled}
-              />
-            </div>
-
             <div className="flex items-center justify-between">
               <Label
                 htmlFor="llm-processing"
