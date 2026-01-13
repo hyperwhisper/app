@@ -2,7 +2,6 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
-import { Button } from "@/components/ui/button";
 import { SettingsDialog } from "@/components/settings-dialog";
 
 type SttService = "deepgram" | "whisper";
@@ -527,24 +526,36 @@ function App() {
           </button>
 
           {isRecording ? (
-            <Button
-              onClick={handleRecord}
-              variant="ghost"
-              size="sm"
-              className="text-white/80 hover:text-white hover:bg-white/10"
+            <button
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                handleRecord();
+              }}
+              className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
+              title="Stop recording"
             >
-              Stop
-            </Button>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                <rect x="6" y="6" width="12" height="12" rx="1" />
+              </svg>
+            </button>
           ) : (
-            <Button
-              onClick={handleRecord}
-              variant="ghost"
-              size="sm"
-              className="text-white/80 hover:text-white hover:bg-white/10"
+            <button
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                handleRecord();
+              }}
               disabled={isProcessing}
+              className={`p-2 rounded-md transition-colors ${isProcessing ? "opacity-50 cursor-not-allowed" : "text-white/80 hover:text-white hover:bg-white/10"}`}
+              title="Start recording"
             >
-              Record
-            </Button>
+              <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <rect x="9" y="2" width="6" height="11" rx="3" />
+                <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                <line x1="12" y1="19" x2="12" y2="22" />
+              </svg>
+            </button>
           )}
         </div>
       </div>
