@@ -87,6 +87,53 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
     let mut devices = Vec::new();
     let mut in_audio_section = false;
     let mut in_sources_section = false;
+    let mut in_filters_section = false;
+    let mut in_devices_section = false;
+
+    // First pass: collect device names from Devices section (for friendly Bluetooth names)
+    let mut bluetooth_device_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+    for line in status.lines() {
+        if line.starts_with("Audio") {
+            in_audio_section = true;
+            continue;
+        }
+        if line.starts_with("Video") || line.starts_with("Settings") {
+            in_audio_section = false;
+            in_devices_section = false;
+            continue;
+        }
+
+        if !in_audio_section {
+            continue;
+        }
+
+        if line.contains("├─ Devices:") || line.contains("└─ Devices:") {
+            in_devices_section = true;
+            continue;
+        }
+
+        if in_devices_section && (line.contains("├─") || line.contains("└─")) {
+            in_devices_section = false;
+            continue;
+        }
+
+        if in_devices_section {
+            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─' || c == '*');
+            if let Some(dot_pos) = trimmed.find(". ") {
+                let rest = &trimmed[dot_pos + 2..];
+                // Check if it's a Bluetooth device
+                if rest.contains("[bluez5]") {
+                    let name = rest.replace("[bluez5]", "").trim().to_string();
+                    // Store with lowercase for matching
+                    bluetooth_device_names.insert(name.to_lowercase(), name);
+                }
+            }
+        }
+    }
+
+    // Reset for second pass
+    in_audio_section = false;
 
     for line in status.lines() {
         // Track when we enter/exit the Audio section
@@ -97,6 +144,7 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
         if line.starts_with("Video") || line.starts_with("Settings") {
             in_audio_section = false;
             in_sources_section = false;
+            in_filters_section = false;
             continue;
         }
 
@@ -107,18 +155,25 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
         // Look for the Sources section under Audio
         if line.contains("├─ Sources:") || line.contains("└─ Sources:") {
             in_sources_section = true;
+            in_filters_section = false;
             continue;
         }
 
-        // Exit sources section when we hit another section (Filters, Streams, etc.)
-        if in_sources_section && (line.contains("├─") || line.contains("└─")) {
+        // Look for the Filters section (contains Bluetooth audio sources)
+        if line.contains("├─ Filters:") || line.contains("└─ Filters:") {
+            in_filters_section = true;
             in_sources_section = false;
             continue;
         }
 
+        // Exit sections when we hit another section
+        if (in_sources_section || in_filters_section) && (line.contains("├─") || line.contains("└─")) {
+            in_sources_section = false;
+            in_filters_section = false;
+            continue;
+        }
+
         if in_sources_section {
-            // Parse lines like: " │      59. Meteor Lake-P HD Audio Controller Stereo Microphone [vol: 1.00]"
-            // or with asterisk: " │  *   60. Device Name [vol: 0.79]"
             let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─');
 
             if trimmed.is_empty() {
@@ -128,11 +183,9 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
             let is_default = trimmed.starts_with('*');
             let trimmed = trimmed.trim_start_matches(|c| c == '*' || c == ' ');
 
-            // Parse ID and name: "59. Device Name [vol: 1.00]"
             if let Some(dot_pos) = trimmed.find(". ") {
                 if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
                     let rest = &trimmed[dot_pos + 2..];
-                    // Remove the [vol: x.xx] suffix
                     let name = if let Some(bracket_pos) = rest.rfind('[') {
                         rest[..bracket_pos].trim().to_string()
                     } else {
@@ -140,7 +193,50 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
                     };
 
                     if !name.is_empty() {
-                        devices.push(WpDevice { id, name, is_default });
+                        // Skip "Stereo Microphone" entries - they're usually duplicates that don't work
+                        if name.to_lowercase().contains("stereo microphone") {
+                            continue;
+                        }
+
+                        // Create user-friendly name
+                        let friendly_name = if name.to_lowercase().contains("digital microphone") {
+                            "Built-in Microphone".to_string()
+                        } else {
+                            name.clone()
+                        };
+
+                        devices.push(WpDevice { id, name: friendly_name, is_default });
+                    }
+                }
+            }
+        }
+
+        if in_filters_section {
+            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─' || c == '-');
+
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            // Look for Bluetooth audio sources: "146. bluez_input.XX:XX:XX [Audio/Source]"
+            if trimmed.contains("[Audio/Source]") && trimmed.contains("bluez_input") {
+                let is_default = trimmed.starts_with('*');
+                let trimmed = trimmed.trim_start_matches(|c| c == '*' || c == ' ');
+
+                if let Some(dot_pos) = trimmed.find(". ") {
+                    if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
+                        // Try to find a friendly name from the Devices section
+                        let mut friendly_name = "Bluetooth Microphone".to_string();
+
+                        for (key, value) in &bluetooth_device_names {
+                            // The bluetooth device name should be in our map
+                            if !key.is_empty() {
+                                friendly_name = value.clone();
+                                break;
+                            }
+                        }
+
+                        devices.push(WpDevice { id, name: friendly_name, is_default });
                     }
                 }
             }
