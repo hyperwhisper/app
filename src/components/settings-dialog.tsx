@@ -37,7 +37,11 @@ export function SettingsDialog({ disabled = false }: SettingsDialogProps) {
       size="icon"
       className="h-8 w-8 text-muted-foreground hover:text-foreground"
       disabled={disabled}
-      onClick={openSettingsWindow}
+      onMouseDown={(e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        openSettingsWindow();
+      }}
     >
       <Settings className="h-4 w-4" />
       <span className="sr-only">Settings</span>
