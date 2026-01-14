@@ -196,20 +196,20 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
                     };
 
                     if !name.is_empty() {
-                        // Skip "Stereo Microphone" entries - they're usually duplicates that don't work
-                        if name.to_lowercase().contains("stereo microphone") {
-                            continue;
-                        }
+                        // Create user-friendly names
+                        let name_lower = name.to_lowercase();
+                        let is_builtin = name_lower.contains("digital microphone");
+                        let is_stereo = name_lower.contains("stereo microphone");
 
-                        // Create user-friendly name
-                        // Built-in microphone (Digital Microphone) is always marked as default
-                        let is_builtin = name.to_lowercase().contains("digital microphone");
                         let friendly_name = if is_builtin {
                             "Built-in Microphone".to_string()
+                        } else if is_stereo {
+                            "Stereo Microphone".to_string()
                         } else {
                             name.clone()
                         };
 
+                        // Built-in microphone is the default
                         devices.push(WpDevice { id, name: friendly_name, is_default: is_builtin });
                     }
                 }
@@ -260,12 +260,72 @@ fn get_selected_device(state: State<'_, AudioState>) -> Option<u32> {
 fn set_selected_device(state: State<'_, AudioState>, device_id: Option<u32>) {
     *state.selected_device_id.lock().unwrap() = device_id;
 
-    // Set the default source in WirePlumber if a device is selected
-    if let Some(id) = device_id {
+    // Set the default source in WirePlumber
+    // If no device selected, find and use the built-in microphone
+    let id_to_set = if let Some(id) = device_id {
+        Some(id)
+    } else {
+        // Find the built-in microphone (Digital Microphone) and set it as default
+        find_builtin_microphone_id()
+    };
+
+    if let Some(id) = id_to_set {
         let _ = std::process::Command::new("wpctl")
             .args(["set-default", &id.to_string()])
             .status();
     }
+}
+
+// Helper to find the built-in microphone ID from wpctl status
+fn find_builtin_microphone_id() -> Option<u32> {
+    let output = std::process::Command::new("wpctl")
+        .args(["status"])
+        .output()
+        .ok()?;
+
+    let status = String::from_utf8_lossy(&output.stdout);
+    let mut in_audio_section = false;
+    let mut in_sources_section = false;
+
+    for line in status.lines() {
+        if line.starts_with("Audio") {
+            in_audio_section = true;
+            continue;
+        }
+        if line.starts_with("Video") || line.starts_with("Settings") {
+            in_audio_section = false;
+            in_sources_section = false;
+            continue;
+        }
+
+        if !in_audio_section {
+            continue;
+        }
+
+        if line.contains("├─ Sources:") || line.contains("└─ Sources:") {
+            in_sources_section = true;
+            continue;
+        }
+
+        if in_sources_section && (line.contains("├─") || line.contains("└─")) {
+            in_sources_section = false;
+            continue;
+        }
+
+        if in_sources_section {
+            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─' || c == '*');
+            if let Some(dot_pos) = trimmed.find(". ") {
+                if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
+                    let rest = &trimmed[dot_pos + 2..];
+                    // Look for Digital Microphone (built-in)
+                    if rest.to_lowercase().contains("digital microphone") {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 // Helper function to get the audio input device
