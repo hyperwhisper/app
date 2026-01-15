@@ -24,7 +24,7 @@ function App() {
   });
 
   const [autoTypeEnabled, setAutoTypeEnabled] = useState(
-    () => localStorage.getItem("auto_type_enabled") !== "false"
+    () => localStorage.getItem("auto_type_enabled") === "true"
   );
 
   // Hyperwhisper server settings
