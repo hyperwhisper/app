@@ -12,6 +12,7 @@ interface TranscriptionEvent {
 function App() {
   const [finalText, setFinalText] = useState("");
   const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState(false);
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
@@ -146,6 +147,22 @@ function App() {
 
     return () => {
       unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for transcription processing state (grace period after recording stops)
+  useEffect(() => {
+    const unlistenProcessing = listen("transcription-processing", () => {
+      setIsProcessing(true);
+    });
+
+    const unlistenComplete = listen("transcription-complete", () => {
+      setIsProcessing(false);
+    });
+
+    return () => {
+      unlistenProcessing.then((fn) => fn());
+      unlistenComplete.then((fn) => fn());
     };
   }, []);
 
@@ -398,9 +415,14 @@ function App() {
               <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
               <span className="text-white font-medium text-sm">Recording</span>
             </>
+          ) : isProcessing ? (
+            <>
+              <div className="w-4 h-4 rounded-full bg-amber-500 animate-pulse" />
+              <span className="text-white/80 text-sm">Processing...</span>
+            </>
           ) : (
             <>
-              <SettingsDialog disabled={isRecording} />
+              <SettingsDialog disabled={isRecording || isProcessing} />
               <span className="text-white/60 text-sm">Ready</span>
             </>
           )}
@@ -415,9 +437,9 @@ function App() {
               e.preventDefault();
               setAutoTypeEnabled(!autoTypeEnabled);
             }}
-            disabled={isRecording}
+            disabled={isRecording || isProcessing}
             className={`flex items-center gap-1.5 text-xs transition-colors ${
-              isRecording
+              isRecording || isProcessing
                 ? "opacity-50 cursor-not-allowed"
                 : "hover:text-white/80"
             } ${autoTypeEnabled ? "text-white/80" : "text-white/40"}`}
@@ -451,10 +473,15 @@ function App() {
               onMouseDown={(e) => {
                 e.stopPropagation();
                 e.preventDefault();
-                handleRecord();
+                if (!isProcessing) handleRecord();
               }}
-              className="p-2 rounded-md transition-colors text-white/80 hover:text-white hover:bg-white/10"
-              title="Start recording"
+              disabled={isProcessing}
+              className={`p-2 rounded-md transition-colors ${
+                isProcessing
+                  ? "text-white/30 cursor-not-allowed"
+                  : "text-white/80 hover:text-white hover:bg-white/10"
+              }`}
+              title={isProcessing ? "Processing transcription..." : "Start recording"}
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <rect x="9" y="2" width="6" height="11" rx="3" />

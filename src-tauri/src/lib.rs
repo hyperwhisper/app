@@ -814,6 +814,9 @@ async fn start_recording(
                 // Send CloseStream to Deepgram to signal end of audio
                 let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
 
+                // Notify frontend that we're processing remaining transcriptions
+                let _ = app_handle_ws.emit("transcription-processing", ());
+
                 // Keep reading for pending transcription results (up to 5 seconds)
                 let drain_start = std::time::Instant::now();
                 while drain_start.elapsed() < Duration::from_secs(5) {
@@ -830,6 +833,10 @@ async fn start_recording(
                 }
 
                 let _ = ws.close(None);
+
+                // Notify frontend that transcription processing is complete
+                let _ = app_handle_ws.emit("transcription-complete", ());
+
                 break;
             }
 
@@ -844,7 +851,11 @@ async fn start_recording(
 
             // Try to read messages from Deepgram (with timeout)
             match process_message(&mut ws, &app_handle_ws, auto_type) {
-                Some(false) => break,
+                Some(false) => {
+                    // Connection closed or error - still emit complete event
+                    let _ = app_handle_ws.emit("transcription-complete", ());
+                    break;
+                }
                 _ => {}
             }
         }
