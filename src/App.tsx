@@ -48,10 +48,56 @@ function App() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const microphoneRef = useRef<MediaStream | null>(null);
 
+  // Animated waveform state
+  const [barHeights, setBarHeights] = useState<number[]>([]);
+  const waveformAnimationRef = useRef<number | null>(null);
+  const barCount = 160;
+
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
     finalTextRef.current = finalText;
   }, [finalText]);
+
+  // Generate waveform heights - higher in the middle, lower at edges with random variation
+  const generateWaveformHeights = useCallback(() => {
+    const heights: number[] = [];
+    for (let i = 0; i < barCount; i++) {
+      const centerDistance = Math.abs(i - barCount / 2) / (barCount / 2);
+      const baseHeight = (1 - centerDistance * 0.7) * 100;
+      const randomVariation = Math.random() * 40 - 20;
+      heights.push(Math.max(8, Math.min(100, baseHeight + randomVariation)));
+    }
+    return heights;
+  }, [barCount]);
+
+  // Animate waveform when recording
+  const animateWaveform = useCallback(() => {
+    setBarHeights(generateWaveformHeights());
+    waveformAnimationRef.current = requestAnimationFrame(() => {
+      setTimeout(animateWaveform, 80);
+    });
+  }, [generateWaveformHeights]);
+
+  const stopWaveformAnimation = useCallback(() => {
+    if (waveformAnimationRef.current) {
+      cancelAnimationFrame(waveformAnimationRef.current);
+      waveformAnimationRef.current = null;
+    }
+  }, []);
+
+  // Start/stop waveform animation based on recording state
+  useEffect(() => {
+    if (isRecording) {
+      setBarHeights(generateWaveformHeights());
+      animateWaveform();
+    } else {
+      stopWaveformAnimation();
+    }
+
+    return () => {
+      stopWaveformAnimation();
+    };
+  }, [isRecording, animateWaveform, stopWaveformAnimation, generateWaveformHeights]);
 
   // Save API key to localStorage and send to backend
   useEffect(() => {
@@ -289,12 +335,12 @@ function App() {
       {/* Waveform area */}
       <div className="flex-1 flex items-center justify-center px-8 relative">
         {isRecording ? (
-          <div className="flex items-center justify-center gap-[3px] h-[60px] w-full">
-            {[...Array(80)].map((_, i) => (
+          <div className="flex items-center justify-center gap-[1px] h-[60px] w-full">
+            {barHeights.map((height, i) => (
               <div
                 key={i}
-                className={`w-[2px] bg-white/70 rounded-full sb${(i % 16) + 1}`}
-                style={{ height: '100%' }}
+                className="w-[2px] bg-white/70 rounded-full transition-all duration-75"
+                style={{ height: `${height}%` }}
               />
             ))}
           </div>
