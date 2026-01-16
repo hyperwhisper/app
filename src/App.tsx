@@ -155,6 +155,45 @@ function App() {
     };
   }, []);
 
+  // Play a calming tone when transcription completes
+  const playCompletionTone = useCallback(() => {
+    const audioCtx = new AudioContext();
+
+    // Create a gentle two-note chime (C5 and E5 - a pleasant major third)
+    const playNote = (frequency: number, startTime: number, duration: number) => {
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      // Use a soft sine wave
+      oscillator.type = "sine";
+      oscillator.frequency.value = frequency;
+
+      // Gentle envelope: quick fade in, long slow fade out
+      const peakTime = startTime + 0.03;
+      const endTime = startTime + duration;
+
+      gainNode.gain.setValueAtTime(0, startTime);
+      gainNode.gain.linearRampToValueAtTime(0.12, peakTime);
+      // Use linear ramp to near-zero for smoother fade (exponential can't go to 0)
+      gainNode.gain.setValueAtTime(0.12, peakTime);
+      gainNode.gain.linearRampToValueAtTime(0.001, endTime);
+
+      oscillator.start(startTime);
+      oscillator.stop(endTime + 0.1);
+    };
+
+    const now = audioCtx.currentTime;
+    // C5 (523 Hz) followed by E5 (659 Hz) - a calming ascending major third
+    playNote(523.25, now, 0.4);
+    playNote(659.25, now + 0.08, 0.52);
+
+    // Clean up after tones finish
+    setTimeout(() => audioCtx.close(), 1200);
+  }, []);
+
   // Listen for transcription processing state (grace period after recording stops)
   useEffect(() => {
     const unlistenProcessing = listen("transcription-processing", () => {
@@ -163,13 +202,14 @@ function App() {
 
     const unlistenComplete = listen("transcription-complete", () => {
       setIsProcessing(false);
+      playCompletionTone();
     });
 
     return () => {
       unlistenProcessing.then((fn) => fn());
       unlistenComplete.then((fn) => fn());
     };
-  }, []);
+  }, [playCompletionTone]);
 
   // Listen for transcription errors (e.g., auth failure, connection issues)
   useEffect(() => {
