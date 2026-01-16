@@ -59,9 +59,9 @@ pub struct TrialProvisionResponse {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub key: Option<String>,
     pub key_prefix: String,
-    pub remaining_duration_seconds: i64,
+    pub remaining_duration_seconds: f64,
     pub remaining_sessions: i64,
-    pub max_session_duration_seconds: i64,
+    pub max_session_duration_seconds: f64,
     pub expires_at: String,
     pub quota_exceeded: bool,
     pub expired: bool,
@@ -70,7 +70,7 @@ pub struct TrialProvisionResponse {
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct TrialStatusResponse {
     pub active: bool,
-    pub remaining_duration_seconds: i64,
+    pub remaining_duration_seconds: f64,
     pub remaining_sessions: i64,
     pub expires_at: String,
     pub expired: bool,
@@ -81,13 +81,13 @@ pub struct TrialStatusResponse {
 
 #[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
 pub struct TrialUsageResponse {
-    pub total_duration_seconds: i64,
+    pub total_duration_seconds: f64,
     pub total_sessions: i64,
-    pub remaining_duration_seconds: i64,
+    pub remaining_duration_seconds: f64,
     pub remaining_sessions: i64,
-    pub max_duration_seconds: i64,
+    pub max_duration_seconds: f64,
     pub max_sessions: i64,
-    pub max_session_duration_seconds: i64,
+    pub max_session_duration_seconds: f64,
     pub quota_exceeded: bool,
 }
 
@@ -145,16 +145,10 @@ fn get_hyperwhisper_api_base(server_url: &str, use_https: bool) -> String {
     format!("{}://{}", protocol, server_url)
 }
 
-// Provision or retrieve a trial key
-#[tauri::command]
-async fn provision_trial_key(
-    state: State<'_, AudioState>,
-) -> Result<TrialProvisionResponse, String> {
-    let server_url = state.hyperwhisper_server_url.lock().unwrap().clone();
-    let use_https = *state.hyperwhisper_server_https.lock().unwrap();
-
+// Internal function to provision trial key (used by both command and auto-provision)
+fn provision_trial_key_internal(server_url: &str, use_https: bool) -> Result<TrialProvisionResponse, String> {
     let fingerprint = generate_device_fingerprint();
-    let base_url = get_hyperwhisper_api_base(&server_url, use_https);
+    let base_url = get_hyperwhisper_api_base(server_url, use_https);
     let url = format!("{}/api/v1/trial/provision", base_url);
 
     let response = ureq::post(&url)
@@ -178,6 +172,17 @@ async fn provision_trial_key(
         .map_err(|e| format!("Failed to parse trial response: {}", e))?;
 
     Ok(trial_response)
+}
+
+// Provision or retrieve a trial key
+#[tauri::command]
+async fn provision_trial_key(
+    state: State<'_, AudioState>,
+) -> Result<TrialProvisionResponse, String> {
+    let server_url = state.hyperwhisper_server_url.lock().unwrap().clone();
+    let use_https = *state.hyperwhisper_server_https.lock().unwrap();
+
+    provision_trial_key_internal(&server_url, use_https)
 }
 
 // Check trial key status
@@ -804,6 +809,14 @@ fn set_api_key(state: State<'_, AudioState>, api_key: String) {
     *state.api_key.lock().unwrap() = Some(api_key);
 }
 
+// Response for set_hyperwhisper_server_settings when auto-provisioning occurs
+#[derive(Clone, serde::Serialize)]
+pub struct ServerSettingsResponse {
+    pub provisioned_key: Option<String>,
+    pub trial_info: Option<TrialProvisionResponse>,
+    pub error: Option<String>,
+}
+
 #[tauri::command]
 fn set_hyperwhisper_server_settings(
     state: State<'_, AudioState>,
@@ -811,11 +824,56 @@ fn set_hyperwhisper_server_settings(
     server_url: String,
     use_https: bool,
     api_key: Option<String>,
-) {
+) -> ServerSettingsResponse {
+    let server_url_clean = server_url.trim().to_string();
+    let server_url_final = if server_url_clean.is_empty() {
+        "hyperwhisper.dev".to_string()
+    } else {
+        server_url_clean
+    };
+
     *state.use_hyperwhisper_server.lock().unwrap() = use_hyperwhisper_server;
-    *state.hyperwhisper_server_url.lock().unwrap() = server_url;
+    *state.hyperwhisper_server_url.lock().unwrap() = server_url_final.clone();
     *state.hyperwhisper_server_https.lock().unwrap() = use_https;
+
+    // If using hyperwhisper server and no API key provided, auto-provision a trial key
+    if use_hyperwhisper_server && api_key.as_ref().map_or(true, |k| k.trim().is_empty()) {
+        match provision_trial_key_internal(&server_url_final, use_https) {
+            Ok(response) => {
+                if let Some(ref key) = response.key {
+                    *state.hyperwhisper_api_key.lock().unwrap() = Some(key.clone());
+                    return ServerSettingsResponse {
+                        provisioned_key: Some(key.clone()),
+                        trial_info: Some(response),
+                        error: None,
+                    };
+                } else {
+                    // Device already has a trial key on server but we don't have it
+                    return ServerSettingsResponse {
+                        provisioned_key: None,
+                        trial_info: Some(response),
+                        error: Some("Trial key exists for this device but was not returned. Please enter your API key manually.".to_string()),
+                    };
+                }
+            }
+            Err(e) => {
+                eprintln!("Failed to auto-provision trial key: {}", e);
+                return ServerSettingsResponse {
+                    provisioned_key: None,
+                    trial_info: None,
+                    error: Some(e),
+                };
+            }
+        }
+    }
+
+    // API key was provided
     *state.hyperwhisper_api_key.lock().unwrap() = api_key;
+    ServerSettingsResponse {
+        provisioned_key: None,
+        trial_info: None,
+        error: None,
+    }
 }
 
 fn type_text_internal(text: &str) -> Result<(), String> {

@@ -33,19 +33,7 @@ function App() {
     () => localStorage.getItem("auto_type_enabled") === "true"
   );
 
-  // Hyperwhisper server settings
-  const [useHyperwhisperServer] = useState(
-    () => localStorage.getItem("use_hyperwhisper_server") !== "false"
-  );
-  const [hyperwhisperServerUrl] = useState(
-    () => localStorage.getItem("hyperwhisper_server_url") || "hyperwhisper.dev"
-  );
-  const [hyperwhisperServerHttps] = useState(
-    () => localStorage.getItem("hyperwhisper_server_https") !== "false"
-  );
-  const [hyperwhisperApiKey] = useState(
-    () => localStorage.getItem("hyperwhisper_api_key") || ""
-  );
+  // Note: Hyperwhisper server settings are managed by useTrialKey hook
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const animationRef = useRef<number | null>(null);
@@ -117,15 +105,7 @@ function App() {
     localStorage.setItem("auto_type_enabled", String(autoTypeEnabled));
   }, [autoTypeEnabled]);
 
-  // Sync Hyperwhisper server settings to backend on load
-  useEffect(() => {
-    invoke("set_hyperwhisper_server_settings", {
-      useHyperwhisperServer,
-      serverUrl: hyperwhisperServerUrl.trim() || "hyperwhisper.dev",
-      useHttps: hyperwhisperServerHttps,
-      apiKey: hyperwhisperApiKey.trim() || null,
-    });
-  }, [useHyperwhisperServer, hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
+  // Note: Hyperwhisper server settings are synced via useTrialKey hook which handles auto-provisioning
 
   // Save selected device to localStorage and sync with backend
   useEffect(() => {
