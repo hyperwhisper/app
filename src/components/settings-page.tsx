@@ -308,6 +308,11 @@ export function SettingsPage() {
                   </button>
                 </div>
               </div>
+
+              {/* Privacy note */}
+              <p className="text-xs text-white/30">
+                No audio or transcription data is stored on our servers.
+              </p>
             </>
           )}
 
