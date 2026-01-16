@@ -32,8 +32,14 @@ HyperWhisper is a lightweight desktop application that provides real-time audio 
 Download the latest release for your platform from the [Releases](https://github.com/hyperwhisper/app/releases) page.
 
 **Linux:**
+
 - `.deb` package for Debian/Ubuntu
+- `.rpm` package for Fedora
 - `.AppImage` for other distributions
+
+```
+nix build
+```
 
 ### Requirements
 
@@ -53,9 +59,15 @@ Download the latest release for your platform from the [Releases](https://github
 
 ### Global Shortcut
 
-You can trigger recording from anywhere using D-Bus:
+You can trigger recording from anywhere using:
 
 ```bash
+hyperwhisper transcribe toggle
+```
+
+or via D-Bus
+
+```sh
 dbus-send --session --type=method_call \
   --dest=dev.hyperwhisper \
   /dev/hyperwhisper \
@@ -73,6 +85,7 @@ Bind this command to a keyboard shortcut in your desktop environment for hands-f
 - Linux development libraries for Tauri
 
 On Ubuntu/Debian:
+
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 ```
@@ -89,6 +102,12 @@ bun install
 
 # Run in development mode
 bun tauri dev
+```
+
+### Logo
+
+```
+bun tauri icon logo.png
 ```
 
 ### Build
