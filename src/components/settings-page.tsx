@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -240,12 +241,25 @@ export function SettingsPage() {
             <>
               {/* Server URL */}
               <div className="space-y-2">
-                <Label
-                  htmlFor="hyperwhisper-url"
-                  className="text-xs uppercase tracking-wide text-white/50"
-                >
-                  Server URL
-                </Label>
+                <div className="flex items-center justify-between">
+                  <Label
+                    htmlFor="hyperwhisper-url"
+                    className="text-xs uppercase tracking-wide text-white/50"
+                  >
+                    Server URL
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const url = hyperwhisperServerUrl.trim() || "hyperwhisper.dev";
+                      const protocol = hyperwhisperServerHttps ? "https" : "http";
+                      openUrl(`${protocol}://${url}`);
+                    }}
+                    className="text-xs text-white/50 hover:text-white/80 transition-colors underline"
+                  >
+                    Visit website
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button
                     onClick={() => setHyperwhisperServerHttps(false)}
