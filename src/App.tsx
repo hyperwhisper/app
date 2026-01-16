@@ -15,6 +15,7 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
   );
@@ -167,6 +168,21 @@ function App() {
     return () => {
       unlistenProcessing.then((fn) => fn());
       unlistenComplete.then((fn) => fn());
+    };
+  }, []);
+
+  // Listen for transcription errors (e.g., auth failure, connection issues)
+  useEffect(() => {
+    const unlisten = listen<string>("transcription-error", (event) => {
+      const errorMsg = event.payload;
+      setConnectionError(errorMsg);
+      setIsRecording(false);
+      // Auto-clear error after 10 seconds
+      setTimeout(() => setConnectionError(null), 10000);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
     };
   }, []);
 
@@ -344,6 +360,9 @@ function App() {
 
       await invoke("set_auto_type_transcription", { enabled: autoTypeEnabled });
 
+      // Clear any previous error
+      setConnectionError(null);
+
       await invoke("start_recording");
       setIsRecording(true);
     } catch (err) {
@@ -388,7 +407,33 @@ function App() {
     >
       {/* Waveform area */}
       <div className="flex-1 flex items-center justify-center px-8 relative">
-        {isRecording ? (
+        {connectionError ? (
+          <div className="px-4 w-full max-h-[100px] overflow-y-auto">
+            <div className="flex items-center justify-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400 flex-shrink-0">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <p className="text-sm text-red-400 text-center leading-relaxed">
+                {connectionError.includes("403") ? "API key expired or invalid" :
+                 connectionError.includes("401") ? "Authentication failed" :
+                 connectionError.includes("connect") ? "Connection failed" :
+                 "Connection error"}
+              </p>
+            </div>
+            <button
+              onMouseDown={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                setConnectionError(null);
+              }}
+              className="mt-2 mx-auto block text-xs text-white/40 hover:text-white/80 transition-colors"
+            >
+              Dismiss
+            </button>
+          </div>
+        ) : isRecording ? (
           <div className="flex items-center justify-center gap-[1px] h-[60px] w-full">
             {barHeights.map((height, i) => (
               <div

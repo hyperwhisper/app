@@ -928,8 +928,17 @@ async fn start_recording(
     // Spawn WebSocket thread for Deepgram or Hyperwhisper server
     let app_handle_ws = app_handle.clone();
     let is_recording_ws = is_recording_arc.clone();
+    let stop_signal_ws = state.stop_signal.clone();
     let auto_type = *state.auto_type_transcription.lock().unwrap();
     thread::spawn(move || {
+        // Helper to stop recording on error
+        let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
+            *is_recording.lock().unwrap() = false;
+            if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
+                let _ = stop_tx.send(());
+            }
+        };
+
         // Connect to Hyperwhisper server or Deepgram
         let mut ws = if use_hyperwhisper {
             match connect_to_hyperwhisper_server(&api_key, sample_rate, &hyperwhisper_url, hyperwhisper_https) {
@@ -937,6 +946,7 @@ async fn start_recording(
                 Err(e) => {
                     eprintln!("Failed to connect to Hyperwhisper server: {}", e);
                     let _ = app_handle_ws.emit("transcription-error", e);
+                    stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                     return;
                 }
             }
@@ -946,6 +956,7 @@ async fn start_recording(
                 Err(e) => {
                     eprintln!("Failed to connect to Deepgram: {}", e);
                     let _ = app_handle_ws.emit("transcription-error", e);
+                    stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                     return;
                 }
             }
