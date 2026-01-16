@@ -37,7 +37,7 @@ struct HyperWhisperDBus {
     app_handle: AppHandle,
 }
 
-#[interface(name = "com.cc.hyperwhisper")]
+#[interface(name = "dev.hyperwhisper")]
 impl HyperWhisperDBus {
     async fn toggle_recording(&self) -> bool {
         // Emit event to frontend to toggle recording
@@ -1291,8 +1291,8 @@ pub fn run() {
                 let service = HyperWhisperDBus { app_handle: handle };
 
                 match zbus::connection::Builder::session()
-                    .and_then(|b| b.name("com.cc.hyperwhisper"))
-                    .and_then(|b| b.serve_at("/com/cc/hyperwhisper", service))
+                    .and_then(|b| b.name("dev.hyperwhisper"))
+                    .and_then(|b| b.serve_at("/dev/hyperwhisper", service))
                 {
                     Ok(builder) => {
                         match builder.build().await {
