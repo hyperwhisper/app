@@ -140,6 +140,13 @@ function App() {
     invoke("set_selected_device", { deviceId: selectedDeviceId });
   }, [selectedDeviceId]);
 
+  // Disable right-click context menu
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", handleContextMenu);
+    return () => document.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
   // Listen for transcription events from backend
   useEffect(() => {
     const unlisten = listen<TranscriptionEvent>("transcription", (event) => {

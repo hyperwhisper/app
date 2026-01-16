@@ -52,6 +52,13 @@ export function SettingsPage() {
   );
   const [showApiKey, setShowApiKey] = useState(false);
 
+  // Disable right-click context menu
+  useEffect(() => {
+    const handleContextMenu = (e: MouseEvent) => e.preventDefault();
+    document.addEventListener("contextmenu", handleContextMenu);
+    return () => document.removeEventListener("contextmenu", handleContextMenu);
+  }, []);
+
   // Save Deepgram API key
   useEffect(() => {
     localStorage.setItem("deepgram_api_key", apiKey);
