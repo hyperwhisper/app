@@ -1,6 +1,7 @@
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
+use sha2::{Digest, Sha256};
 use std::fs;
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -50,6 +51,203 @@ impl HyperWhisperDBus {
 struct TranscriptionEvent {
     text: String,
     is_final: bool,
+}
+
+// Trial key API response types
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrialProvisionResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub key: Option<String>,
+    pub key_prefix: String,
+    pub remaining_duration_seconds: i64,
+    pub remaining_sessions: i64,
+    pub max_session_duration_seconds: i64,
+    pub expires_at: String,
+    pub quota_exceeded: bool,
+    pub expired: bool,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrialStatusResponse {
+    pub active: bool,
+    pub remaining_duration_seconds: i64,
+    pub remaining_sessions: i64,
+    pub expires_at: String,
+    pub expired: bool,
+    pub quota_exceeded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrade_url: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrialUsageResponse {
+    pub total_duration_seconds: i64,
+    pub total_sessions: i64,
+    pub remaining_duration_seconds: i64,
+    pub remaining_sessions: i64,
+    pub max_duration_seconds: i64,
+    pub max_sessions: i64,
+    pub max_session_duration_seconds: i64,
+    pub quota_exceeded: bool,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrialError {
+    pub error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<TrialErrorDetails>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize, Debug)]
+pub struct TrialErrorDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upgrade_url: Option<String>,
+}
+
+// Generate a stable device fingerprint
+fn generate_device_fingerprint() -> String {
+    let mut hasher = Sha256::new();
+
+    // Try to read machine-id (Linux standard)
+    if let Ok(machine_id) = fs::read_to_string("/etc/machine-id") {
+        hasher.update(machine_id.trim().as_bytes());
+    } else if let Ok(machine_id) = fs::read_to_string("/var/lib/dbus/machine-id") {
+        hasher.update(machine_id.trim().as_bytes());
+    } else {
+        // Fallback: use hostname and username
+        if let Ok(hostname) = std::env::var("HOSTNAME").or_else(|_| {
+            fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string())
+        }) {
+            hasher.update(hostname.as_bytes());
+        }
+        if let Ok(user) = std::env::var("USER") {
+            hasher.update(user.as_bytes());
+        }
+    }
+
+    // Add some hardware info if available
+    if let Ok(cpuinfo) = fs::read_to_string("/proc/cpuinfo") {
+        // Extract CPU model name for additional uniqueness
+        for line in cpuinfo.lines() {
+            if line.starts_with("model name") {
+                hasher.update(line.as_bytes());
+                break;
+            }
+        }
+    }
+
+    hex::encode(hasher.finalize())
+}
+
+// Get the base URL for the Hyperwhisper API
+fn get_hyperwhisper_api_base(server_url: &str, use_https: bool) -> String {
+    let protocol = if use_https { "https" } else { "http" };
+    format!("{}://{}", protocol, server_url)
+}
+
+// Provision or retrieve a trial key
+#[tauri::command]
+async fn provision_trial_key(
+    state: State<'_, AudioState>,
+) -> Result<TrialProvisionResponse, String> {
+    let server_url = state.hyperwhisper_server_url.lock().unwrap().clone();
+    let use_https = *state.hyperwhisper_server_https.lock().unwrap();
+
+    let fingerprint = generate_device_fingerprint();
+    let base_url = get_hyperwhisper_api_base(&server_url, use_https);
+    let url = format!("{}/api/v1/trial/provision", base_url);
+
+    let response = ureq::post(&url)
+        .set("Content-Type", "application/json")
+        .send_json(serde_json::json!({
+            "device_fingerprint": fingerprint
+        }))
+        .map_err(|e| {
+            // Try to extract error message from response body
+            if let ureq::Error::Status(code, response) = e {
+                if let Ok(error_body) = response.into_json::<TrialError>() {
+                    return format!("{}: {}", code, error_body.error);
+                }
+                return format!("{}: Request failed", code);
+            }
+            format!("Failed to provision trial key: {}", e)
+        })?;
+
+    let trial_response: TrialProvisionResponse = response
+        .into_json()
+        .map_err(|e| format!("Failed to parse trial response: {}", e))?;
+
+    Ok(trial_response)
+}
+
+// Check trial key status
+#[tauri::command]
+async fn get_trial_status(
+    state: State<'_, AudioState>,
+    api_key: String,
+) -> Result<TrialStatusResponse, String> {
+    let server_url = state.hyperwhisper_server_url.lock().unwrap().clone();
+    let use_https = *state.hyperwhisper_server_https.lock().unwrap();
+
+    let base_url = get_hyperwhisper_api_base(&server_url, use_https);
+    let url = format!("{}/api/v1/trial/status", base_url);
+
+    let response = ureq::get(&url)
+        .set("X-API-Key", &api_key)
+        .call()
+        .map_err(|e| {
+            if let ureq::Error::Status(code, response) = e {
+                if let Ok(error_body) = response.into_json::<TrialError>() {
+                    return format!("{}: {}", code, error_body.error);
+                }
+                return format!("{}: Request failed", code);
+            }
+            format!("Failed to get trial status: {}", e)
+        })?;
+
+    let status_response: TrialStatusResponse = response
+        .into_json()
+        .map_err(|e| format!("Failed to parse trial status: {}", e))?;
+
+    Ok(status_response)
+}
+
+// Get trial usage statistics
+#[tauri::command]
+async fn get_trial_usage(
+    state: State<'_, AudioState>,
+    api_key: String,
+) -> Result<TrialUsageResponse, String> {
+    let server_url = state.hyperwhisper_server_url.lock().unwrap().clone();
+    let use_https = *state.hyperwhisper_server_https.lock().unwrap();
+
+    let base_url = get_hyperwhisper_api_base(&server_url, use_https);
+    let url = format!("{}/api/v1/trial/usage", base_url);
+
+    let response = ureq::get(&url)
+        .set("X-API-Key", &api_key)
+        .call()
+        .map_err(|e| {
+            if let ureq::Error::Status(code, response) = e {
+                if let Ok(error_body) = response.into_json::<TrialError>() {
+                    return format!("{}: {}", code, error_body.error);
+                }
+                return format!("{}: Request failed", code);
+            }
+            format!("Failed to get trial usage: {}", e)
+        })?;
+
+    let usage_response: TrialUsageResponse = response
+        .into_json()
+        .map_err(|e| format!("Failed to parse trial usage: {}", e))?;
+
+    Ok(usage_response)
+}
+
+// Get the device fingerprint (for debugging/display purposes)
+#[tauri::command]
+fn get_device_fingerprint() -> String {
+    generate_device_fingerprint()
 }
 
 // Get the recordings directory, creating it if necessary
@@ -1048,8 +1246,8 @@ pub fn run() {
         stop_signal: Arc::new(Mutex::new(None)),
         api_key: Arc::new(Mutex::new(None)),
         use_hyperwhisper_server: Arc::new(Mutex::new(true)),
-        hyperwhisper_server_url: Arc::new(Mutex::new("localhost:1323".to_string())),
-        hyperwhisper_server_https: Arc::new(Mutex::new(false)),
+        hyperwhisper_server_url: Arc::new(Mutex::new("hyperwhisper.dev".to_string())),
+        hyperwhisper_server_https: Arc::new(Mutex::new(true)),
         hyperwhisper_api_key: Arc::new(Mutex::new(None)),
         auto_type_transcription: Arc::new(Mutex::new(false)),
         selected_device_id: Arc::new(Mutex::new(None)),
@@ -1069,6 +1267,10 @@ pub fn run() {
             list_audio_devices,
             get_selected_device,
             set_selected_device,
+            provision_trial_key,
+            get_trial_status,
+            get_trial_usage,
+            get_device_fingerprint,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

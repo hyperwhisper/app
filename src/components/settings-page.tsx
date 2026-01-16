@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getVersion } from "@tauri-apps/api/app";
 import { Settings, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +21,9 @@ interface WpDevice {
 }
 
 export function SettingsPage() {
+  // App version
+  const [appVersion, setAppVersion] = useState<string>("");
+
   // Audio device state
   const [audioDevices, setAudioDevices] = useState<WpDevice[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<number | null>(() => {
@@ -32,10 +36,10 @@ export function SettingsPage() {
     () => localStorage.getItem("use_hyperwhisper_server") !== "false"
   );
   const [hyperwhisperServerUrl, setHyperwhisperServerUrl] = useState(
-    () => localStorage.getItem("hyperwhisper_server_url") || "localhost:1323"
+    () => localStorage.getItem("hyperwhisper_server_url") || "hyperwhisper.dev"
   );
   const [hyperwhisperServerHttps, setHyperwhisperServerHttps] = useState(
-    () => localStorage.getItem("hyperwhisper_server_https") === "true"
+    () => localStorage.getItem("hyperwhisper_server_https") !== "false"
   );
   const [hyperwhisperApiKey, setHyperwhisperApiKey] = useState(
     () => localStorage.getItem("hyperwhisper_api_key") || ""
@@ -64,7 +68,7 @@ export function SettingsPage() {
     localStorage.setItem("hyperwhisper_api_key", hyperwhisperApiKey);
     invoke("set_hyperwhisper_server_settings", {
       useHyperwhisperServer,
-      serverUrl: hyperwhisperServerUrl.trim() || "localhost:1323",
+      serverUrl: hyperwhisperServerUrl.trim() || "hyperwhisper.dev",
       useHttps: hyperwhisperServerHttps,
       apiKey: hyperwhisperApiKey.trim() || null,
     });
@@ -80,17 +84,48 @@ export function SettingsPage() {
     invoke("set_selected_device", { deviceId: selectedDeviceId });
   }, [selectedDeviceId]);
 
-  // Load audio devices
+  // Load audio devices and app version
   useEffect(() => {
     const loadDevices = async () => {
       try {
         const devices = await invoke<WpDevice[]>("list_audio_devices");
         setAudioDevices(devices);
+
+        // GNOME bug workaround: When a Bluetooth microphone is selected as the default
+        // audio source, it can crash the entire desktop environment. To avoid this,
+        // we explicitly select the Built-in Microphone instead of using "auto" (default).
+        const selectBuiltInMic = () => {
+          const builtInMic = devices.find((d) => d.name === "Built-in Microphone");
+          if (builtInMic) {
+            setSelectedDeviceId(builtInMic.id);
+            localStorage.setItem("selected_audio_device_id", String(builtInMic.id));
+          }
+        };
+
+        if (selectedDeviceId === null) {
+          // No device selected yet - default to Built-in Microphone
+          selectBuiltInMic();
+        } else {
+          // Check if selected device still exists
+          const deviceExists = devices.some((d) => d.id === selectedDeviceId);
+          if (!deviceExists) {
+            selectBuiltInMic();
+          }
+        }
       } catch (err) {
         console.error("Failed to load audio devices:", err);
       }
     };
+    const loadVersion = async () => {
+      try {
+        const version = await getVersion();
+        setAppVersion(version);
+      } catch (err) {
+        console.error("Failed to get app version:", err);
+      }
+    };
     loadDevices();
+    loadVersion();
   }, []);
 
   const handleClose = () => {
@@ -132,13 +167,17 @@ export function SettingsPage() {
               Microphone
             </Label>
             <Select
-              value={selectedDeviceId?.toString() ?? "auto"}
+              value={selectedDeviceId !== null ? selectedDeviceId.toString() : "auto"}
               onValueChange={(v) =>
                 setSelectedDeviceId(v === "auto" ? null : parseInt(v, 10))
               }
             >
               <SelectTrigger className="bg-white/5 border-0 text-white">
-                <SelectValue placeholder="Default microphone" />
+                <SelectValue>
+                  {selectedDeviceId !== null
+                    ? audioDevices.find((d) => d.id === selectedDeviceId)?.name ?? "Loading..."
+                    : "Default microphone"}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent className="bg-neutral-800/95 backdrop-blur-xl border-0">
                 <SelectItem value="auto" className="text-white/80 focus:bg-white/10 focus:text-white">
@@ -226,7 +265,7 @@ export function SettingsPage() {
                     type="text"
                     value={hyperwhisperServerUrl}
                     onChange={(e) => setHyperwhisperServerUrl(e.target.value)}
-                    placeholder="localhost:1323"
+                    placeholder="hyperwhisper.dev"
                     className="flex-1 bg-white/5 border-0 text-white placeholder:text-white/30"
                   />
                 </div>
@@ -311,6 +350,15 @@ export function SettingsPage() {
               </div>
               <p className="text-xs text-white/30">
                 Get your free API key at <span className="text-white/50">deepgram.com</span>
+              </p>
+            </div>
+          )}
+
+          {/* Version */}
+          {appVersion && (
+            <div className="pt-4 mt-4 border-t border-white/10">
+              <p className="text-xs text-white/30 text-center">
+                HyperWhisper v{appVersion}
               </p>
             </div>
           )}

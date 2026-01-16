@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SettingsDialog } from "@/components/settings-dialog";
+import { useTrialKey } from "@/hooks/use-trial-key";
 
 interface TranscriptionEvent {
   text: string;
@@ -17,6 +18,9 @@ function App() {
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
   );
+
+  // Trial key management
+  const { state: trialState, isInitializing: isTrialInitializing, refresh: refreshTrial } = useTrialKey();
 
   // Audio device state
   const [selectedDeviceId] = useState<number | null>(() => {
@@ -33,10 +37,10 @@ function App() {
     () => localStorage.getItem("use_hyperwhisper_server") !== "false"
   );
   const [hyperwhisperServerUrl] = useState(
-    () => localStorage.getItem("hyperwhisper_server_url") || "localhost:1323"
+    () => localStorage.getItem("hyperwhisper_server_url") || "hyperwhisper.dev"
   );
   const [hyperwhisperServerHttps] = useState(
-    () => localStorage.getItem("hyperwhisper_server_https") === "true"
+    () => localStorage.getItem("hyperwhisper_server_https") !== "false"
   );
   const [hyperwhisperApiKey] = useState(
     () => localStorage.getItem("hyperwhisper_api_key") || ""
@@ -116,7 +120,7 @@ function App() {
   useEffect(() => {
     invoke("set_hyperwhisper_server_settings", {
       useHyperwhisperServer,
-      serverUrl: hyperwhisperServerUrl.trim() || "localhost:1323",
+      serverUrl: hyperwhisperServerUrl.trim() || "hyperwhisper.dev",
       useHttps: hyperwhisperServerHttps,
       apiKey: hyperwhisperApiKey.trim() || null,
     });
@@ -294,6 +298,34 @@ function App() {
     // Check for the appropriate API key based on server setting
     const currentUseHyperwhisper = localStorage.getItem("use_hyperwhisper_server") !== "false";
     if (currentUseHyperwhisper) {
+      // When using Hyperwhisper server, check trial key status (unless user has their own key)
+      if (trialState.status === "loading" || isTrialInitializing) {
+        alert("Please wait, initializing...");
+        return;
+      }
+
+      if (trialState.status === "error") {
+        // Check if user has an API key despite the error
+        const currentHyperwhisperKey = localStorage.getItem("hyperwhisper_api_key") || "";
+        if (!currentHyperwhisperKey.trim()) {
+          alert(`Connection error: ${trialState.error}`);
+          return;
+        }
+        // User has their own key, allow recording
+      } else if (trialState.status === "quota_exceeded") {
+        const upgradeUrl = trialState.info.upgrade_url || "https://hyperwhisper.dev/signup";
+        alert(`Trial quota exceeded. Please upgrade at: ${upgradeUrl}`);
+        return;
+      } else if (trialState.status === "expired") {
+        const upgradeUrl = trialState.info.upgrade_url || "https://hyperwhisper.dev/signup";
+        alert(`Trial expired. Please upgrade at: ${upgradeUrl}`);
+        return;
+      } else if (trialState.status === "no_key") {
+        alert("No API key available. Please restart the app or enter an API key in settings.");
+        return;
+      }
+      // trialState.status is "active" or "has_api_key" - both are good to proceed
+
       const currentHyperwhisperKey = localStorage.getItem("hyperwhisper_api_key") || "";
       if (!currentHyperwhisperKey.trim()) {
         alert("Please enter your Hyperwhisper API key first");
@@ -324,6 +356,11 @@ function App() {
     try {
       await invoke<string>("stop_recording");
       setIsRecording(false);
+      // Refresh trial status after recording to update usage
+      const currentUseHyperwhisper = localStorage.getItem("use_hyperwhisper_server") !== "false";
+      if (currentUseHyperwhisper) {
+        refreshTrial();
+      }
     } catch (err) {
       alert(`Could not stop recording: ${err}`);
       setIsRecording(false);
@@ -419,6 +456,11 @@ function App() {
             <>
               <div className="w-4 h-4 rounded-full bg-amber-500 animate-pulse" />
               <span className="text-white/80 text-sm">Processing...</span>
+            </>
+          ) : isTrialInitializing ? (
+            <>
+              <div className="w-4 h-4 rounded-full bg-blue-500 animate-pulse" />
+              <span className="text-white/60 text-sm">Initializing...</span>
             </>
           ) : (
             <>
