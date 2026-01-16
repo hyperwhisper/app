@@ -90,9 +90,10 @@
         };
 
         # Fetch cargo dependencies
+        # To update this hash after changing Cargo.toml: set to "" and run `nix build`, then copy the "got:" hash
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
           src = ./src-tauri;
-          hash = "sha256-yTZfllnQSeou8tSpamBVghpT8Tyt3wE/AhFotbBm4LY=";
+          hash = "sha256-V7QufSz2ccg1gXKCXNGtYf6yrNtmFzHbPn2FDw2y9m0=";
         };
 
         # Build the frontend
@@ -176,6 +177,10 @@
             # Debug: show what's in dist
             echo "Frontend dist contents:"
             ls -la dist/
+
+            # Generate icons from logo.png
+            echo "Generating icons from logo.png..."
+            cargo tauri icon logo.png
 
             # Setup cargo vendor directory
             mkdir -p .cargo
