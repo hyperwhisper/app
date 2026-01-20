@@ -348,9 +348,14 @@ function App() {
 
   // Start recording
   const startRecording = async () => {
-    // Check for the appropriate API key based on server setting
-    const currentUseHyperwhisper = localStorage.getItem("use_hyperwhisper_server") !== "false";
-    if (currentUseHyperwhisper) {
+    // Check for the appropriate API key based on provider setting
+    const provider = localStorage.getItem("transcription_provider") ||
+      (localStorage.getItem("use_hyperwhisper_server") !== "false" ? "hyperwhisper" : "deepgram");
+
+    if (provider === "local") {
+      // Local transcription doesn't need API key, but needs model
+      // The Rust backend will check if model is available
+    } else if (provider === "hyperwhisper") {
       // When using Hyperwhisper server, check trial key status (unless user has their own key)
       if (trialState.status === "loading" || isTrialInitializing) {
         alert("Please wait, initializing...");
@@ -385,6 +390,7 @@ function App() {
         return;
       }
     } else {
+      // Deepgram
       const currentApiKey = localStorage.getItem("deepgram_api_key") || "";
       if (!currentApiKey.trim()) {
         alert("Please enter your Deepgram API key first");
@@ -412,9 +418,10 @@ function App() {
     try {
       await invoke<string>("stop_recording");
       setIsRecording(false);
-      // Refresh trial status after recording to update usage
-      const currentUseHyperwhisper = localStorage.getItem("use_hyperwhisper_server") !== "false";
-      if (currentUseHyperwhisper) {
+      // Refresh trial status after recording to update usage (only for Hyperwhisper)
+      const provider = localStorage.getItem("transcription_provider") ||
+        (localStorage.getItem("use_hyperwhisper_server") !== "false" ? "hyperwhisper" : "deepgram");
+      if (provider === "hyperwhisper") {
         refreshTrial();
       }
     } catch (err) {

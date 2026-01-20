@@ -1,8 +1,12 @@
+mod resampler;
+
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
+use resampler::AudioResampler;
 use sha2::{Digest, Sha256};
 use std::fs;
+use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -30,6 +34,9 @@ pub struct AudioState {
     auto_type_transcription: Arc<Mutex<bool>>,
     // Selected audio input device ID from WirePlumber (None = auto-select)
     selected_device_id: Arc<Mutex<Option<u32>>>,
+    // Local transcription settings
+    use_local_transcription: Arc<Mutex<bool>>,
+    local_model_path: Arc<Mutex<Option<String>>>,
 }
 
 // D-Bus service for external control
@@ -531,6 +538,189 @@ fn find_builtin_microphone_id() -> Option<u32> {
     None
 }
 
+// Get the models directory path
+fn get_models_dir() -> Result<PathBuf, String> {
+    let data_dir = dirs::data_local_dir()
+        .ok_or_else(|| "Could not find local data directory".to_string())?;
+    let models_dir = data_dir.join("hyperwhisper").join("models").join("parakeet-eou");
+    Ok(models_dir)
+}
+
+// Local model status response
+#[derive(Clone, serde::Serialize)]
+pub struct LocalModelStatus {
+    pub downloaded: bool,
+    pub path: Option<String>,
+    pub downloading: bool,
+}
+
+// Download progress event
+#[derive(Clone, serde::Serialize)]
+pub struct DownloadProgress {
+    pub file: String,
+    pub progress: f64,
+    pub total_files: usize,
+    pub current_file: usize,
+}
+
+#[tauri::command]
+fn set_use_local_transcription(state: State<'_, AudioState>, enabled: bool) {
+    *state.use_local_transcription.lock().unwrap() = enabled;
+}
+
+#[tauri::command]
+fn set_local_model_path(state: State<'_, AudioState>, path: String) {
+    *state.local_model_path.lock().unwrap() = Some(path);
+}
+
+#[tauri::command]
+fn get_local_model_path(state: State<'_, AudioState>) -> Option<String> {
+    state.local_model_path.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn check_local_model_status() -> Result<LocalModelStatus, String> {
+    let models_dir = get_models_dir()?;
+
+    // Check if all required files exist
+    let required_files = ["encoder.onnx", "decoder_joint.onnx", "tokenizer.json"];
+    let all_exist = required_files.iter().all(|f| models_dir.join(f).exists());
+
+    Ok(LocalModelStatus {
+        downloaded: all_exist,
+        path: if all_exist {
+            Some(models_dir.to_string_lossy().to_string())
+        } else {
+            None
+        },
+        downloading: false,
+    })
+}
+
+#[tauri::command]
+async fn download_local_model(app_handle: AppHandle) -> Result<String, String> {
+    let models_dir = get_models_dir()?;
+
+    // Create models directory if it doesn't exist
+    if !models_dir.exists() {
+        fs::create_dir_all(&models_dir)
+            .map_err(|e| format!("Failed to create models directory: {}", e))?;
+    }
+
+    // Files to download from HuggingFace (altunenes/parakeet-rs repo has the ONNX files)
+    let files = vec![
+        ("encoder.onnx", "https://huggingface.co/altunenes/parakeet-rs/resolve/main/realtime_eou_120m-v1-onnx/encoder.onnx?download=true"),
+        ("decoder_joint.onnx", "https://huggingface.co/altunenes/parakeet-rs/resolve/main/realtime_eou_120m-v1-onnx/decoder_joint.onnx?download=true"),
+        ("tokenizer.json", "https://huggingface.co/altunenes/parakeet-rs/resolve/main/realtime_eou_120m-v1-onnx/tokenizer.json?download=true"),
+    ];
+
+    let total_files = files.len();
+
+    // Create a ureq agent that follows redirects
+    let agent = ureq::AgentBuilder::new()
+        .redirects(10)
+        .build();
+
+    for (i, (filename, url)) in files.iter().enumerate() {
+        let file_path = models_dir.join(filename);
+
+        // Skip if file already exists
+        if file_path.exists() {
+            let _ = app_handle.emit(
+                "download-progress",
+                DownloadProgress {
+                    file: filename.to_string(),
+                    progress: 100.0,
+                    total_files,
+                    current_file: i + 1,
+                },
+            );
+            continue;
+        }
+
+        // Emit progress start
+        let _ = app_handle.emit(
+            "download-progress",
+            DownloadProgress {
+                file: filename.to_string(),
+                progress: 0.0,
+                total_files,
+                current_file: i + 1,
+            },
+        );
+
+        // Download file with redirect support
+        eprintln!("Downloading {} from {}", filename, url);
+        let response = agent.get(url)
+            .call()
+            .map_err(|e| format!("Failed to download {}: {}", filename, e))?;
+
+        let content_length = response
+            .header("Content-Length")
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        // Create temp file for download
+        let temp_path = file_path.with_extension("tmp");
+        let mut file = fs::File::create(&temp_path)
+            .map_err(|e| format!("Failed to create file {}: {}", filename, e))?;
+
+        let mut reader = response.into_reader();
+        let mut buffer = [0u8; 8192];
+        let mut downloaded: u64 = 0;
+        let mut last_progress = 0.0;
+
+        loop {
+            let bytes_read = reader
+                .read(&mut buffer)
+                .map_err(|e| format!("Failed to read data for {}: {}", filename, e))?;
+
+            if bytes_read == 0 {
+                break;
+            }
+
+            file.write_all(&buffer[..bytes_read])
+                .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
+
+            downloaded += bytes_read as u64;
+
+            // Emit progress every 1%
+            if content_length > 0 {
+                let progress = (downloaded as f64 / content_length as f64) * 100.0;
+                if progress - last_progress >= 1.0 {
+                    last_progress = progress;
+                    let _ = app_handle.emit(
+                        "download-progress",
+                        DownloadProgress {
+                            file: filename.to_string(),
+                            progress,
+                            total_files,
+                            current_file: i + 1,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Rename temp file to final file
+        fs::rename(&temp_path, &file_path)
+            .map_err(|e| format!("Failed to rename {}: {}", filename, e))?;
+
+        // Emit completion
+        let _ = app_handle.emit(
+            "download-progress",
+            DownloadProgress {
+                file: filename.to_string(),
+                progress: 100.0,
+                total_files,
+                current_file: i + 1,
+            },
+        );
+    }
+
+    Ok(models_dir.to_string_lossy().to_string())
+}
+
 // Helper function to get the audio input device
 // Uses WirePlumber's default device (set via wpctl set-default)
 fn get_input_device() -> Result<Device, String> {
@@ -931,19 +1121,35 @@ async fn start_recording(
         }
     }
 
+    // Check if using local transcription
+    let use_local = *state.use_local_transcription.lock().unwrap();
+    let local_model_path = state.local_model_path.lock().unwrap().clone();
+
     // Check if using Hyperwhisper server or direct Deepgram
     let use_hyperwhisper = *state.use_hyperwhisper_server.lock().unwrap();
     let hyperwhisper_url = state.hyperwhisper_server_url.lock().unwrap().clone();
     let hyperwhisper_https = *state.hyperwhisper_server_https.lock().unwrap();
 
-    // Get the appropriate API key
-    let api_key = if use_hyperwhisper {
+    // Get the appropriate API key (not needed for local transcription)
+    let api_key = if use_local {
+        String::new() // Local transcription doesn't need API key
+    } else if use_hyperwhisper {
         state.hyperwhisper_api_key.lock().unwrap().clone()
             .ok_or_else(|| "Hyperwhisper API key not set".to_string())?
     } else {
         state.api_key.lock().unwrap().clone()
             .ok_or_else(|| "Deepgram API key not set".to_string())?
     };
+
+    // Validate local model path if using local transcription
+    if use_local {
+        let model_path = local_model_path.as_ref()
+            .ok_or_else(|| "Local model not configured. Please download the model first.".to_string())?;
+        let model_dir = PathBuf::from(model_path);
+        if !model_dir.join("encoder.onnx").exists() {
+            return Err("Local model not found. Please download the model first.".to_string());
+        }
+    }
 
     // Clear previous recording
     *state.recorded_samples.lock().unwrap() = Vec::new();
@@ -980,100 +1186,273 @@ async fn start_recording(
     let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
     *state.stop_signal.lock().unwrap() = Some(stop_tx);
 
-    // Channel for sending audio chunks to WebSocket thread
+    // Channel for sending audio chunks to transcription thread
     let (audio_tx, audio_rx) = std::sync::mpsc::channel::<Vec<f32>>();
 
-    // Spawn WebSocket thread for Deepgram or Hyperwhisper server
+    // Spawn transcription thread (local or WebSocket-based)
     let app_handle_ws = app_handle.clone();
     let is_recording_ws = is_recording_arc.clone();
     let stop_signal_ws = state.stop_signal.clone();
     let auto_type = *state.auto_type_transcription.lock().unwrap();
-    thread::spawn(move || {
-        // Helper to stop recording on error
-        let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
-            *is_recording.lock().unwrap() = false;
-            if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
-                let _ = stop_tx.send(());
-            }
-        };
 
-        // Connect to Hyperwhisper server or Deepgram
-        let mut ws = if use_hyperwhisper {
-            match connect_to_hyperwhisper_server(&api_key, sample_rate, &hyperwhisper_url, hyperwhisper_https) {
-                Ok(ws) => ws,
+    if use_local {
+        // Spawn local transcription thread using parakeet-rs
+        let model_path = local_model_path.unwrap();
+        thread::spawn(move || {
+            // Helper to stop recording on error
+            let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
+                *is_recording.lock().unwrap() = false;
+                if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
+                    let _ = stop_tx.send(());
+                }
+            };
+
+            // Load parakeet EOU model for streaming transcription
+            let mut parakeet = match parakeet_rs::ParakeetEOU::from_pretrained(&model_path, None) {
+                Ok(p) => p,
                 Err(e) => {
-                    eprintln!("Failed to connect to Hyperwhisper server: {}", e);
-                    let _ = app_handle_ws.emit("transcription-error", e);
+                    eprintln!("Failed to load local model: {}", e);
+                    let _ = app_handle_ws.emit("transcription-error", format!("Failed to load local model: {}", e));
                     stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                     return;
                 }
-            }
-        } else {
-            match connect_to_deepgram(&api_key, sample_rate) {
-                Ok(ws) => ws,
+            };
+
+            // Create resampler to convert device sample rate to 16kHz
+            let mut resampler = match AudioResampler::new(sample_rate) {
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("Failed to connect to Deepgram: {}", e);
-                    let _ = app_handle_ws.emit("transcription-error", e);
+                    eprintln!("Failed to create resampler: {}", e);
+                    let _ = app_handle_ws.emit("transcription-error", format!("Failed to create resampler: {}", e));
                     stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                     return;
                 }
-            }
-        };
+            };
 
-        // Set read timeout so we can check for stop signal and send audio
-        let _ = ws.set_read_timeout(Some(Duration::from_millis(50)));
+            // Buffer for accumulating resampled audio
+            // Larger chunks = better accuracy but higher latency
+            // 480ms chunks at 16kHz = 7680 samples (good balance for accuracy)
+            let chunk_size = 7680;
+            let mut audio_buffer: Vec<f32> = Vec::new();
+            let mut accumulated_text = String::new();
+            let mut last_emitted_text = String::new();
 
-        // Helper closure to process incoming Deepgram messages
-        let process_message = |ws: &mut WsStream, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
-            match ws.read() {
-                Ok(Message::Text(text)) => {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
-                            let transcript = json
-                                .get("channel")
-                                .and_then(|c| c.get("alternatives"))
-                                .and_then(|a| a.get(0))
-                                .and_then(|a| a.get("transcript"))
-                                .and_then(|t| t.as_str())
-                                .unwrap_or("");
+            // Helper to clean up sentencepiece tokens (▁ -> space) and format text
+            let clean_token = |s: &str| -> String {
+                s.replace('▁', " ")
+                 .replace("<EOU>", "")
+                 .trim()
+                 .to_string()
+            };
 
-                            let is_final = json
-                                .get("is_final")
-                                .and_then(|f| f.as_bool())
-                                .unwrap_or(false);
+            loop {
+                // Check if we should stop
+                if !*is_recording_ws.lock().unwrap() {
+                    // Process any remaining audio
+                    if let Ok(final_samples) = resampler.flush() {
+                        audio_buffer.extend(final_samples);
+                    }
 
-                            if !transcript.is_empty() {
-                                // Type final transcriptions in real-time if enabled
-                                if is_final && auto_type {
-                                    // Add a space before the text (except potentially first word)
-                                    let text_to_type = format!("{} ", transcript);
-                                    let _ = type_text_internal(&text_to_type);
-                                }
+                    if !audio_buffer.is_empty() {
+                        // Pad to chunk size if needed
+                        while audio_buffer.len() < chunk_size {
+                            audio_buffer.push(0.0);
+                        }
 
-                                let event = TranscriptionEvent {
-                                    text: transcript.to_string(),
-                                    is_final,
-                                };
-                                let _ = app_handle.emit("transcription", event);
+                        // Final transcription with is_final=true
+                        if let Ok(token) = parakeet.transcribe(&audio_buffer, true) {
+                            if !token.is_empty() {
+                                accumulated_text.push_str(&token);
                             }
                         }
                     }
-                    Some(true) // Continue
+
+                    // Emit final accumulated text
+                    let final_text = clean_token(&accumulated_text);
+                    if !final_text.is_empty() && final_text != last_emitted_text {
+                        if auto_type {
+                            // Only type the new part
+                            let new_part = if final_text.starts_with(&last_emitted_text) {
+                                final_text[last_emitted_text.len()..].trim_start()
+                            } else {
+                                &final_text
+                            };
+                            if !new_part.is_empty() {
+                                let text_to_type = format!("{} ", new_part);
+                                let _ = type_text_internal(&text_to_type);
+                            }
+                        }
+                        let event = TranscriptionEvent {
+                            text: final_text,
+                            is_final: true,
+                        };
+                        let _ = app_handle_ws.emit("transcription", event);
+                    }
+
+                    // Notify frontend that transcription processing is complete
+                    let _ = app_handle_ws.emit("transcription-complete", ());
+                    break;
                 }
-                Ok(Message::Close(_)) => {
-                    Some(false) // Stop
+
+                // Receive audio data with timeout
+                match audio_rx.recv_timeout(Duration::from_millis(50)) {
+                    Ok(samples) => {
+                        // Resample to 16kHz
+                        if let Ok(resampled) = resampler.process(&samples) {
+                            audio_buffer.extend(resampled);
+                        }
+
+                        // Process complete chunks
+                        while audio_buffer.len() >= chunk_size {
+                            let chunk: Vec<f32> = audio_buffer.drain(..chunk_size).collect();
+
+                            // Streaming transcription with is_final=false
+                            match parakeet.transcribe(&chunk, false) {
+                                Ok(token) => {
+                                    // Check for end-of-utterance token
+                                    let has_eou = token.contains("<EOU>");
+
+                                    // Accumulate even empty tokens don't break the flow
+                                    if !token.is_empty() {
+                                        accumulated_text.push_str(&token);
+                                    }
+
+                                    // Clean and emit the accumulated text
+                                    let display_text = clean_token(&accumulated_text);
+
+                                    if !display_text.is_empty() && display_text != last_emitted_text {
+
+                                        if has_eou && auto_type {
+                                            // Type the new part on EOU
+                                            let new_part = if display_text.starts_with(&last_emitted_text) {
+                                                display_text[last_emitted_text.len()..].trim_start()
+                                            } else {
+                                                &display_text
+                                            };
+                                            if !new_part.is_empty() {
+                                                let text_to_type = format!("{} ", new_part);
+                                                let _ = type_text_internal(&text_to_type);
+                                            }
+                                        }
+
+                                        let event = TranscriptionEvent {
+                                            text: display_text.clone(),
+                                            is_final: has_eou,
+                                        };
+                                        let _ = app_handle_ws.emit("transcription", event);
+
+                                        last_emitted_text = display_text;
+
+                                        if has_eou {
+                                            // Reset for next utterance
+                                            accumulated_text.clear();
+                                            last_emitted_text.clear();
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    eprintln!("Local transcription error: {}", e);
+                                }
+                            }
+                        }
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        // No data, continue checking
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        break;
+                    }
                 }
-                Err(tungstenite::Error::Io(ref e))
-                    if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut => {
-                    None // Timeout, no message
-                }
-                Err(_) => {
-                    Some(false) // Error, stop
-                }
-                _ => Some(true)
             }
-        };
+        });
+    } else {
+        // Spawn WebSocket thread for Deepgram or Hyperwhisper server
+        thread::spawn(move || {
+            // Helper to stop recording on error
+            let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
+                *is_recording.lock().unwrap() = false;
+                if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
+                    let _ = stop_tx.send(());
+                }
+            };
+
+            // Connect to Hyperwhisper server or Deepgram
+            let mut ws = if use_hyperwhisper {
+                match connect_to_hyperwhisper_server(&api_key, sample_rate, &hyperwhisper_url, hyperwhisper_https) {
+                    Ok(ws) => ws,
+                    Err(e) => {
+                        eprintln!("Failed to connect to Hyperwhisper server: {}", e);
+                        let _ = app_handle_ws.emit("transcription-error", e);
+                        stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
+                        return;
+                    }
+                }
+            } else {
+                match connect_to_deepgram(&api_key, sample_rate) {
+                    Ok(ws) => ws,
+                    Err(e) => {
+                        eprintln!("Failed to connect to Deepgram: {}", e);
+                        let _ = app_handle_ws.emit("transcription-error", e);
+                        stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
+                        return;
+                    }
+                }
+            };
+
+            // Set read timeout so we can check for stop signal and send audio
+            let _ = ws.set_read_timeout(Some(Duration::from_millis(50)));
+
+            // Helper closure to process incoming Deepgram messages
+            let process_message = |ws: &mut WsStream, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
+                match ws.read() {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
+                                let transcript = json
+                                    .get("channel")
+                                    .and_then(|c| c.get("alternatives"))
+                                    .and_then(|a| a.get(0))
+                                    .and_then(|a| a.get("transcript"))
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("");
+
+                                let is_final = json
+                                    .get("is_final")
+                                    .and_then(|f| f.as_bool())
+                                    .unwrap_or(false);
+
+                                if !transcript.is_empty() {
+                                    // Type final transcriptions in real-time if enabled
+                                    if is_final && auto_type {
+                                        // Add a space before the text (except potentially first word)
+                                        let text_to_type = format!("{} ", transcript);
+                                        let _ = type_text_internal(&text_to_type);
+                                    }
+
+                                    let event = TranscriptionEvent {
+                                        text: transcript.to_string(),
+                                        is_final,
+                                    };
+                                    let _ = app_handle.emit("transcription", event);
+                                }
+                            }
+                        }
+                        Some(true) // Continue
+                    }
+                    Ok(Message::Close(_)) => {
+                        Some(false) // Stop
+                    }
+                    Err(tungstenite::Error::Io(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                        || e.kind() == std::io::ErrorKind::TimedOut => {
+                        None // Timeout, no message
+                    }
+                    Err(_) => {
+                        Some(false) // Error, stop
+                    }
+                    _ => Some(true)
+                }
+            };
 
         loop {
             // Check if we should stop
@@ -1126,7 +1505,8 @@ async fn start_recording(
                 _ => {}
             }
         }
-    });
+        });
+    } // End of if use_local else block
 
     // Spawn audio recording thread
     thread::spawn(move || {
@@ -1320,6 +1700,8 @@ pub fn run() {
         hyperwhisper_api_key: Arc::new(Mutex::new(None)),
         auto_type_transcription: Arc::new(Mutex::new(false)),
         selected_device_id: Arc::new(Mutex::new(None)),
+        use_local_transcription: Arc::new(Mutex::new(false)),
+        local_model_path: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -1340,6 +1722,11 @@ pub fn run() {
             get_trial_status,
             get_trial_usage,
             get_device_fingerprint,
+            set_use_local_transcription,
+            set_local_model_path,
+            get_local_model_path,
+            check_local_model_status,
+            download_local_model,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -1,10 +1,10 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Settings, X } from "lucide-react";
+import { Settings, X, Download, Check, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,6 +22,21 @@ interface WpDevice {
   is_default: boolean;
 }
 
+interface LocalModelStatus {
+  downloaded: boolean;
+  path: string | null;
+  downloading: boolean;
+}
+
+interface DownloadProgress {
+  file: string;
+  progress: number;
+  total_files: number;
+  current_file: number;
+}
+
+type TranscriptionProvider = "hyperwhisper" | "deepgram" | "local";
+
 export function SettingsPage() {
   // App version
   const [appVersion, setAppVersion] = useState<string>("");
@@ -33,10 +48,18 @@ export function SettingsPage() {
     return stored ? parseInt(stored, 10) : null;
   });
 
+  // Transcription provider (tri-state)
+  const [provider, setProvider] = useState<TranscriptionProvider>(() => {
+    const stored = localStorage.getItem("transcription_provider");
+    if (stored === "local" || stored === "deepgram" || stored === "hyperwhisper") {
+      return stored;
+    }
+    // Migration: check old useHyperwhisperServer flag
+    const oldFlag = localStorage.getItem("use_hyperwhisper_server");
+    return oldFlag === "false" ? "deepgram" : "hyperwhisper";
+  });
+
   // Hyperwhisper Server settings
-  const [useHyperwhisperServer, setUseHyperwhisperServer] = useState(
-    () => localStorage.getItem("use_hyperwhisper_server") !== "false"
-  );
   const [hyperwhisperServerUrl, setHyperwhisperServerUrl] = useState(
     () => localStorage.getItem("hyperwhisper_server_url") || "hyperwhisper.dev"
   );
@@ -54,6 +77,16 @@ export function SettingsPage() {
   );
   const [showApiKey, setShowApiKey] = useState(false);
 
+  // Local model state
+  const [localModelStatus, setLocalModelStatus] = useState<LocalModelStatus>({
+    downloaded: false,
+    path: null,
+    downloading: false,
+  });
+  const [isDownloading, setIsDownloading] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
+
   // Disable right-click context menu
   useEffect(() => {
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
@@ -69,21 +102,41 @@ export function SettingsPage() {
     }
   }, [apiKey]);
 
-  // Save Hyperwhisper Server settings
+  // Save provider settings
   useEffect(() => {
-    localStorage.setItem("use_hyperwhisper_server", String(useHyperwhisperServer));
+    localStorage.setItem("transcription_provider", provider);
+    // Also update old flags for backward compatibility
+    localStorage.setItem("use_hyperwhisper_server", String(provider === "hyperwhisper"));
+
+    // Update Rust state based on provider
+    if (provider === "local") {
+      invoke("set_use_local_transcription", { enabled: true });
+      invoke("set_hyperwhisper_server_settings", {
+        useHyperwhisperServer: false,
+        serverUrl: hyperwhisperServerUrl.trim() || "hyperwhisper.dev",
+        useHttps: hyperwhisperServerHttps,
+        apiKey: null,
+      });
+    } else {
+      invoke("set_use_local_transcription", { enabled: false });
+      invoke("set_hyperwhisper_server_settings", {
+        useHyperwhisperServer: provider === "hyperwhisper",
+        serverUrl: hyperwhisperServerUrl.trim() || "hyperwhisper.dev",
+        useHttps: hyperwhisperServerHttps,
+        apiKey: provider === "hyperwhisper" ? (hyperwhisperApiKey.trim() || null) : null,
+      });
+    }
+
+    // Notify main window that settings changed
+    emit("settings-changed");
+  }, [provider, hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
+
+  // Save Hyperwhisper Server settings to localStorage
+  useEffect(() => {
     localStorage.setItem("hyperwhisper_server_url", hyperwhisperServerUrl);
     localStorage.setItem("hyperwhisper_server_https", String(hyperwhisperServerHttps));
     localStorage.setItem("hyperwhisper_api_key", hyperwhisperApiKey);
-    invoke("set_hyperwhisper_server_settings", {
-      useHyperwhisperServer,
-      serverUrl: hyperwhisperServerUrl.trim() || "hyperwhisper.dev",
-      useHttps: hyperwhisperServerHttps,
-      apiKey: hyperwhisperApiKey.trim() || null,
-    });
-    // Notify main window that settings changed
-    emit("settings-changed");
-  }, [useHyperwhisperServer, hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
+  }, [hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
 
   // Save selected device
   useEffect(() => {
@@ -94,6 +147,32 @@ export function SettingsPage() {
     }
     invoke("set_selected_device", { deviceId: selectedDeviceId });
   }, [selectedDeviceId]);
+
+  // Check local model status on mount and when provider changes
+  useEffect(() => {
+    const checkModelStatus = async () => {
+      try {
+        const status = await invoke<LocalModelStatus>("check_local_model_status");
+        setLocalModelStatus(status);
+        if (status.path) {
+          invoke("set_local_model_path", { path: status.path });
+        }
+      } catch (err) {
+        console.error("Failed to check local model status:", err);
+      }
+    };
+    checkModelStatus();
+  }, [provider]);
+
+  // Listen for download progress events
+  useEffect(() => {
+    const unlisten = listen<DownloadProgress>("download-progress", (event) => {
+      setDownloadProgress(event.payload);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Load audio devices and app version
   useEffect(() => {
@@ -144,6 +223,27 @@ export function SettingsPage() {
   };
 
   const handleDrag = () => getCurrentWindow().startDragging();
+
+  const handleDownloadModel = async () => {
+    setIsDownloading(true);
+    setDownloadProgress(null);
+    setDownloadError(null);
+    try {
+      const modelPath = await invoke<string>("download_local_model");
+      setLocalModelStatus({
+        downloaded: true,
+        path: modelPath,
+        downloading: false,
+      });
+      invoke("set_local_model_path", { path: modelPath });
+    } catch (err) {
+      console.error("Failed to download model:", err);
+      setDownloadError(String(err));
+    } finally {
+      setIsDownloading(false);
+      setDownloadProgress(null);
+    }
+  };
 
   return (
     <main className="flex flex-col h-[calc(100vh-16px)] w-[calc(100vw-16px)] m-2 bg-[#171717] rounded-2xl shadow-2xl overflow-hidden">
@@ -210,16 +310,16 @@ export function SettingsPage() {
             </p>
           </div>
 
-          {/* Service Selection */}
+          {/* Service Selection - 3 buttons */}
           <div className="space-y-2">
             <Label className="text-xs uppercase tracking-wide text-white/50">
               Transcription Service
             </Label>
             <div className="flex gap-2">
               <button
-                onClick={() => setUseHyperwhisperServer(true)}
+                onClick={() => setProvider("hyperwhisper")}
                 className={`flex-1 py-2 px-3 rounded-lg text-sm transition-colors ${
-                  useHyperwhisperServer
+                  provider === "hyperwhisper"
                     ? "bg-white/15 text-white"
                     : "bg-white/5 text-white/50 hover:bg-white/10"
                 }`}
@@ -227,20 +327,30 @@ export function SettingsPage() {
                 Hyperwhisper
               </button>
               <button
-                onClick={() => setUseHyperwhisperServer(false)}
+                onClick={() => setProvider("deepgram")}
                 className={`flex-1 py-2 px-3 rounded-lg text-sm transition-colors ${
-                  !useHyperwhisperServer
+                  provider === "deepgram"
                     ? "bg-white/15 text-white"
                     : "bg-white/5 text-white/50 hover:bg-white/10"
                 }`}
               >
                 Deepgram
               </button>
+              <button
+                onClick={() => setProvider("local")}
+                className={`flex-1 py-2 px-3 rounded-lg text-sm transition-colors ${
+                  provider === "local"
+                    ? "bg-white/15 text-white"
+                    : "bg-white/5 text-white/50 hover:bg-white/10"
+                }`}
+              >
+                Local
+              </button>
             </div>
           </div>
 
           {/* Hyperwhisper Server settings - shown when using Hyperwhisper */}
-          {useHyperwhisperServer && (
+          {provider === "hyperwhisper" && (
             <>
               {/* Server URL */}
               <div className="space-y-2">
@@ -341,7 +451,7 @@ export function SettingsPage() {
           )}
 
           {/* Deepgram API Key - shown when using Deepgram */}
-          {!useHyperwhisperServer && (
+          {provider === "deepgram" && (
             <div className="space-y-2">
               <Label
                 htmlFor="deepgram-key"
@@ -379,6 +489,82 @@ export function SettingsPage() {
               </div>
               <p className="text-xs text-white/30">
                 Get your free API key at <span className="text-white/50">deepgram.com</span>
+              </p>
+            </div>
+          )}
+
+          {/* Local transcription settings - shown when using Local */}
+          {provider === "local" && (
+            <div className="space-y-3">
+              <Label className="text-xs uppercase tracking-wide text-white/50">
+                Local Model
+              </Label>
+
+              {/* Model status */}
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div className="flex items-center gap-2">
+                  {localModelStatus.downloaded ? (
+                    <>
+                      <Check className="h-4 w-4 text-green-400" />
+                      <span className="text-sm text-white">Ready</span>
+                    </>
+                  ) : isDownloading ? (
+                    <>
+                      <Loader2 className="h-4 w-4 text-white/60 animate-spin" />
+                      <span className="text-sm text-white/60">
+                        {downloadProgress
+                          ? `Downloading ${downloadProgress.file} (${Math.round(downloadProgress.progress)}%)`
+                          : "Downloading..."}
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <Download className="h-4 w-4 text-white/40" />
+                      <span className="text-sm text-white/60">Not downloaded</span>
+                    </>
+                  )}
+                </div>
+
+                {!localModelStatus.downloaded && !isDownloading && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleDownloadModel}
+                    className="text-white/80 hover:text-white hover:bg-white/10"
+                  >
+                    <Download className="h-4 w-4 mr-1" />
+                    Download
+                  </Button>
+                )}
+              </div>
+
+              {/* Download progress bar */}
+              {isDownloading && downloadProgress && (
+                <div className="space-y-1">
+                  <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-white/60 transition-all duration-300"
+                      style={{
+                        width: `${((downloadProgress.current_file - 1) / downloadProgress.total_files * 100) + (downloadProgress.progress / downloadProgress.total_files)}%`
+                      }}
+                    />
+                  </div>
+                  <p className="text-xs text-white/30 text-center">
+                    File {downloadProgress.current_file} of {downloadProgress.total_files}
+                  </p>
+                </div>
+              )}
+
+              {/* Error message */}
+              {downloadError && (
+                <p className="text-xs text-red-400">
+                  Error: {downloadError}
+                </p>
+              )}
+
+              {/* Info */}
+              <p className="text-xs text-white/30">
+                Works offline, English only (~480MB download)
               </p>
             </div>
           )}
