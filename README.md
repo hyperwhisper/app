@@ -46,6 +46,24 @@ nix build
 - Linux with PipeWire/PulseAudio for audio capture
 - For auto-type feature: `ydotool`, `wtype` (Wayland), or `xdotool` (X11)
 
+- For Arch-based systems:
+
+  ```sh
+  pacman -S gst-plugins-base gst-plugins-good gst-plugins-bad
+  ```
+
+- For Ubuntu/Debian:
+
+  ```sh
+  sudo apt install gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+  ```
+
+- For Fedora:
+
+  ```sh
+  sudo dnf install gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free
+  ```
+
 ## Usage
 
 1. Launch HyperWhisper
