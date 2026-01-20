@@ -107,6 +107,16 @@ function App() {
 
   // Note: Hyperwhisper server settings are synced via useTrialKey hook which handles auto-provisioning
 
+  // Listen for settings changes from the settings window and refresh trial state
+  useEffect(() => {
+    const unlisten = listen("settings-changed", () => {
+      refreshTrial();
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [refreshTrial]);
+
   // Save selected device to localStorage and sync with backend
   useEffect(() => {
     if (selectedDeviceId !== null) {

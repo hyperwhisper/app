@@ -214,14 +214,19 @@ export function useTrialKey() {
   const refresh = useCallback(async () => {
     const existingKey = getStoredApiKey();
 
-    // If no key or user has their own (non-trial) API key, nothing to refresh
-    if (!existingKey || !isTrialKey(existingKey)) {
-      if (existingKey) {
-        setState({ status: "has_api_key" });
-      }
+    // If user has their own (non-trial) API key, update state
+    if (existingKey && !isTrialKey(existingKey)) {
+      setState({ status: "has_api_key" });
       return;
     }
 
+    // If no key at all, re-initialize to attempt provisioning
+    if (!existingKey) {
+      initialize();
+      return;
+    }
+
+    // existingKey is a trial key - check its status
     try {
       const status = await checkKeyStatus(existingKey);
       if (status.quota_exceeded) {
@@ -234,7 +239,7 @@ export function useTrialKey() {
     } catch (err) {
       console.error("Failed to refresh trial status:", err);
     }
-  }, [getStoredApiKey, isTrialKey, checkKeyStatus]);
+  }, [getStoredApiKey, isTrialKey, checkKeyStatus, initialize]);
 
   // Initialize on mount
   useEffect(() => {

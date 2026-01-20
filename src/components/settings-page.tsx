@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -80,6 +81,8 @@ export function SettingsPage() {
       useHttps: hyperwhisperServerHttps,
       apiKey: hyperwhisperApiKey.trim() || null,
     });
+    // Notify main window that settings changed
+    emit("settings-changed");
   }, [useHyperwhisperServer, hyperwhisperServerUrl, hyperwhisperServerHttps, hyperwhisperApiKey]);
 
   // Save selected device
