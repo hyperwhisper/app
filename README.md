@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="src-tauri/icons/128x128.png" alt="HyperWhisper Logo" width="128" height="128">
+  <img src="logo.png" alt="HyperWhisper Logo" width="128" height="128">
 </p>
 
 <h1 align="center">HyperWhisper</h1>
