@@ -49,6 +49,9 @@
           # For typing text
           wtype
           ydotool
+
+          # ONNX Runtime for local transcription
+          onnxruntime
         ];
 
         # Build dependencies
@@ -58,6 +61,12 @@
           cmake
           clang
           llvmPackages.libclang
+          # Vulkan for whisper-rs GPU acceleration
+          vulkan-headers
+          vulkan-loader
+          shaderc
+          # ONNX Runtime for whisper/moonshine models
+          onnxruntime
         ];
 
         # Fetch node_modules as a fixed-output derivation
@@ -93,7 +102,7 @@
         # To update this hash after changing Cargo.toml: set to "" and run `nix build`, then copy the "got:" hash
         cargoDeps = pkgs.rustPlatform.fetchCargoVendor {
           src = ./src-tauri;
-          hash = "sha256-V7QufSz2ccg1gXKCXNGtYf6yrNtmFzHbPn2FDw2y9m0=";
+          hash = "sha256-jj1Rov0DgulNQDFSwc95Vr7o1wDntAEKMbSebc0GZl0=";
         };
 
         # Build the frontend
@@ -163,6 +172,7 @@
 
           # Environment variables for build
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+          ORT_LIB_LOCATION = "${pkgs.onnxruntime}/lib";
 
           # Don't run cmake configure phase
           dontUseCmakeConfigure = true;
