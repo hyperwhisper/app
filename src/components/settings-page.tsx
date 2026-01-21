@@ -4,7 +4,7 @@ import { emit, listen } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Settings, X, Download, Check, Loader2 } from "lucide-react";
+import { Settings, X, Download, Loader2, Trash2, Zap, Target, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -22,17 +22,25 @@ interface WpDevice {
   is_default: boolean;
 }
 
-interface LocalModelStatus {
-  downloaded: boolean;
-  path: string | null;
-  downloading: boolean;
+interface ModelInfo {
+  id: string;
+  name: string;
+  description: string;
+  engine_type: string;
+  total_size_bytes: number;
+  accuracy_score: number;
+  speed_score: number;
+  status: string;
 }
 
-interface DownloadProgress {
+interface ModelDownloadProgress {
+  model_id: string;
   file: string;
   progress: number;
   total_files: number;
   current_file: number;
+  bytes_downloaded: number;
+  total_bytes: number;
 }
 
 type TranscriptionProvider = "hyperwhisper" | "deepgram" | "local";
@@ -77,15 +85,18 @@ export function SettingsPage() {
   );
   const [showApiKey, setShowApiKey] = useState(false);
 
-  // Local model state
-  const [localModelStatus, setLocalModelStatus] = useState<LocalModelStatus>({
-    downloaded: false,
-    path: null,
-    downloading: false,
-  });
-  const [isDownloading, setIsDownloading] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState<DownloadProgress | null>(null);
-  const [downloadError, setDownloadError] = useState<string | null>(null);
+  // Multi-model state
+  const [availableModels, setAvailableModels] = useState<ModelInfo[]>([]);
+  const [activeModelId, setActiveModelId] = useState<string | null>(() =>
+    localStorage.getItem("active_local_model_id")
+  );
+  const [downloadingModels, setDownloadingModels] = useState<Set<string>>(new Set());
+  const [downloadProgress, setDownloadProgress] = useState<Record<string, ModelDownloadProgress>>({});
+  const [modelError, setModelError] = useState<string | null>(null);
+  const [useVad, setUseVad] = useState(() =>
+    localStorage.getItem("use_vad") !== "false"
+  );
+  const [showAllModels, setShowAllModels] = useState(false);
 
   // Disable right-click context menu
   useEffect(() => {
@@ -148,31 +159,73 @@ export function SettingsPage() {
     invoke("set_selected_device", { deviceId: selectedDeviceId });
   }, [selectedDeviceId]);
 
-  // Check local model status on mount and when provider changes
+  // Load available models on mount and when provider changes to local
   useEffect(() => {
-    const checkModelStatus = async () => {
+    const loadModels = async () => {
       try {
-        const status = await invoke<LocalModelStatus>("check_local_model_status");
-        setLocalModelStatus(status);
-        if (status.path) {
-          invoke("set_local_model_path", { path: status.path });
+        const models = await invoke<ModelInfo[]>("list_available_models");
+        setAvailableModels(models);
+
+        // If we have an active model set, verify it's still valid
+        const active = await invoke<string | null>("get_active_model");
+        if (active) {
+          setActiveModelId(active);
+          localStorage.setItem("active_local_model_id", active);
+        } else if (activeModelId) {
+          // Try to restore from localStorage
+          const downloaded = models.find(m => m.id === activeModelId && m.status === "downloaded");
+          if (downloaded) {
+            invoke("set_active_model", { modelId: activeModelId });
+          } else {
+            // Find first downloaded model
+            const firstDownloaded = models.find(m => m.status === "downloaded");
+            if (firstDownloaded) {
+              setActiveModelId(firstDownloaded.id);
+              localStorage.setItem("active_local_model_id", firstDownloaded.id);
+              invoke("set_active_model", { modelId: firstDownloaded.id });
+            }
+          }
         }
       } catch (err) {
-        console.error("Failed to check local model status:", err);
+        console.error("Failed to load models:", err);
       }
     };
-    checkModelStatus();
+    if (provider === "local") {
+      loadModels();
+    }
   }, [provider]);
 
-  // Listen for download progress events
+  // Listen for model download progress events
   useEffect(() => {
-    const unlisten = listen<DownloadProgress>("download-progress", (event) => {
-      setDownloadProgress(event.payload);
+    const unlisten = listen<ModelDownloadProgress>("model-download-progress", (event) => {
+      setDownloadProgress(prev => ({
+        ...prev,
+        [event.payload.model_id]: event.payload
+      }));
+
+      // If download is complete (all files at 100%), refresh model list
+      if (event.payload.progress >= 100 && event.payload.current_file === event.payload.total_files) {
+        setTimeout(async () => {
+          const models = await invoke<ModelInfo[]>("list_available_models");
+          setAvailableModels(models);
+          setDownloadingModels(prev => {
+            const next = new Set(prev);
+            next.delete(event.payload.model_id);
+            return next;
+          });
+        }, 500);
+      }
     });
     return () => {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  // Save VAD setting
+  useEffect(() => {
+    localStorage.setItem("use_vad", String(useVad));
+    invoke("set_use_vad", { enabled: useVad });
+  }, [useVad]);
 
   // Load audio devices and app version
   useEffect(() => {
@@ -224,25 +277,74 @@ export function SettingsPage() {
 
   const handleDrag = () => getCurrentWindow().startDragging();
 
-  const handleDownloadModel = async () => {
-    setIsDownloading(true);
-    setDownloadProgress(null);
-    setDownloadError(null);
+  const handleDownloadModel = async (modelId: string) => {
+    setDownloadingModels(prev => new Set(prev).add(modelId));
+    setModelError(null);
     try {
-      const modelPath = await invoke<string>("download_local_model");
-      setLocalModelStatus({
-        downloaded: true,
-        path: modelPath,
-        downloading: false,
-      });
-      invoke("set_local_model_path", { path: modelPath });
+      await invoke("download_model", { modelId });
+      // Refresh models list after download
+      const models = await invoke<ModelInfo[]>("list_available_models");
+      setAvailableModels(models);
+
+      // Auto-select this model if none selected
+      if (!activeModelId) {
+        setActiveModelId(modelId);
+        localStorage.setItem("active_local_model_id", modelId);
+        invoke("set_active_model", { modelId });
+      }
     } catch (err) {
       console.error("Failed to download model:", err);
-      setDownloadError(String(err));
+      setModelError(String(err));
     } finally {
-      setIsDownloading(false);
-      setDownloadProgress(null);
+      setDownloadingModels(prev => {
+        const next = new Set(prev);
+        next.delete(modelId);
+        return next;
+      });
     }
+  };
+
+  const handleDeleteModel = async (modelId: string) => {
+    try {
+      await invoke("delete_model", { modelId });
+      // Refresh models list
+      const models = await invoke<ModelInfo[]>("list_available_models");
+      setAvailableModels(models);
+
+      // If this was the active model, select another
+      if (activeModelId === modelId) {
+        const nextDownloaded = models.find(m => m.status === "downloaded" && m.id !== modelId);
+        if (nextDownloaded) {
+          setActiveModelId(nextDownloaded.id);
+          localStorage.setItem("active_local_model_id", nextDownloaded.id);
+          invoke("set_active_model", { modelId: nextDownloaded.id });
+        } else {
+          setActiveModelId(null);
+          localStorage.removeItem("active_local_model_id");
+        }
+      }
+    } catch (err) {
+      console.error("Failed to delete model:", err);
+      setModelError(String(err));
+    }
+  };
+
+  const handleSelectModel = async (modelId: string) => {
+    try {
+      await invoke("set_active_model", { modelId });
+      setActiveModelId(modelId);
+      localStorage.setItem("active_local_model_id", modelId);
+    } catch (err) {
+      console.error("Failed to select model:", err);
+      setModelError(String(err));
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes >= 1_000_000_000) {
+      return `${(bytes / 1_000_000_000).toFixed(1)} GB`;
+    }
+    return `${Math.round(bytes / 1_000_000)} MB`;
   };
 
   return (
@@ -496,75 +598,174 @@ export function SettingsPage() {
           {/* Local transcription settings - shown when using Local */}
           {provider === "local" && (
             <div className="space-y-3">
-              <Label className="text-xs uppercase tracking-wide text-white/50">
-                Local Model
-              </Label>
-
-              {/* Model status */}
-              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
-                <div className="flex items-center gap-2">
-                  {localModelStatus.downloaded ? (
-                    <>
-                      <Check className="h-4 w-4 text-green-400" />
-                      <span className="text-sm text-white">Ready</span>
-                    </>
-                  ) : isDownloading ? (
-                    <>
-                      <Loader2 className="h-4 w-4 text-white/60 animate-spin" />
-                      <span className="text-sm text-white/60">
-                        {downloadProgress
-                          ? `Downloading ${downloadProgress.file} (${Math.round(downloadProgress.progress)}%)`
-                          : "Downloading..."}
-                      </span>
-                    </>
-                  ) : (
-                    <>
-                      <Download className="h-4 w-4 text-white/40" />
-                      <span className="text-sm text-white/60">Not downloaded</span>
-                    </>
-                  )}
-                </div>
-
-                {!localModelStatus.downloaded && !isDownloading && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={handleDownloadModel}
-                    className="text-white/80 hover:text-white hover:bg-white/10"
-                  >
-                    <Download className="h-4 w-4 mr-1" />
-                    Download
-                  </Button>
-                )}
+              <div className="flex items-center justify-between">
+                <Label className="text-xs uppercase tracking-wide text-white/50">
+                  Local Models
+                </Label>
+                <button
+                  onClick={() => setShowAllModels(!showAllModels)}
+                  className="text-xs text-white/50 hover:text-white/80 flex items-center gap-1"
+                >
+                  {showAllModels ? "Show less" : "Show all"}
+                  {showAllModels ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                </button>
               </div>
 
-              {/* Download progress bar */}
-              {isDownloading && downloadProgress && (
-                <div className="space-y-1">
-                  <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-white/60 transition-all duration-300"
-                      style={{
-                        width: `${((downloadProgress.current_file - 1) / downloadProgress.total_files * 100) + (downloadProgress.progress / downloadProgress.total_files)}%`
-                      }}
-                    />
-                  </div>
-                  <p className="text-xs text-white/30 text-center">
-                    File {downloadProgress.current_file} of {downloadProgress.total_files}
-                  </p>
+              {/* Model list */}
+              <div className="space-y-2">
+                {availableModels
+                  .filter(model => showAllModels || model.status === "downloaded" || ["moonshine-base", "parakeet-v3-int8", "whisper-small"].includes(model.id))
+                  .map(model => {
+                    const isDownloading = downloadingModels.has(model.id);
+                    const progress = downloadProgress[model.id];
+                    const isActive = activeModelId === model.id;
+                    const isDownloaded = model.status === "downloaded";
+
+                    return (
+                      <div
+                        key={model.id}
+                        className={`p-3 rounded-lg transition-colors ${
+                          isActive
+                            ? "bg-white/15 ring-1 ring-white/20"
+                            : "bg-white/5 hover:bg-white/10"
+                        }`}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-sm font-medium text-white truncate">
+                                {model.name}
+                              </span>
+                              <span className="text-xs text-white/40 shrink-0">
+                                {formatSize(model.total_size_bytes)}
+                              </span>
+                              {isActive && (
+                                <span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded shrink-0">
+                                  Active
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-white/40 mt-0.5 truncate">
+                              {model.description}
+                            </p>
+                            {/* Speed/Accuracy indicators */}
+                            <div className="flex items-center gap-3 mt-1.5">
+                              <div className="flex items-center gap-1">
+                                <Zap className="h-3 w-3 text-yellow-400/70" />
+                                <div className="w-12 h-1 bg-white/10 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-yellow-400/70"
+                                    style={{ width: `${model.speed_score * 100}%` }}
+                                  />
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <Target className="h-3 w-3 text-blue-400/70" />
+                                <div className="w-12 h-1 bg-white/10 rounded-full overflow-hidden">
+                                  <div
+                                    className="h-full bg-blue-400/70"
+                                    style={{ width: `${model.accuracy_score * 100}%` }}
+                                  />
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Action buttons */}
+                          <div className="flex items-center gap-1 shrink-0">
+                            {isDownloading ? (
+                              <div className="flex items-center gap-2">
+                                <Loader2 className="h-4 w-4 text-white/60 animate-spin" />
+                                <span className="text-xs text-white/60">
+                                  {progress ? `${Math.round(progress.progress)}%` : "..."}
+                                </span>
+                              </div>
+                            ) : isDownloaded ? (
+                              <>
+                                {!isActive && (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => handleSelectModel(model.id)}
+                                    className="h-7 px-2 text-xs text-white/60 hover:text-white hover:bg-white/10"
+                                  >
+                                    Use
+                                  </Button>
+                                )}
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleDeleteModel(model.id)}
+                                  className="h-7 w-7 p-0 text-white/40 hover:text-red-400 hover:bg-red-400/10"
+                                >
+                                  <Trash2 className="h-3.5 w-3.5" />
+                                </Button>
+                              </>
+                            ) : (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleDownloadModel(model.id)}
+                                className="h-7 px-2 text-xs text-white/60 hover:text-white hover:bg-white/10"
+                              >
+                                <Download className="h-3.5 w-3.5 mr-1" />
+                                Download
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Download progress bar */}
+                        {isDownloading && progress && (
+                          <div className="mt-2">
+                            <div className="h-1 bg-white/10 rounded-full overflow-hidden">
+                              <div
+                                className="h-full bg-white/60 transition-all duration-300"
+                                style={{
+                                  width: `${((progress.current_file - 1) / progress.total_files * 100) + (progress.progress / progress.total_files)}%`
+                                }}
+                              />
+                            </div>
+                            <p className="text-xs text-white/30 mt-1">
+                              {progress.file} ({progress.current_file}/{progress.total_files})
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+              </div>
+
+              {/* VAD toggle */}
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div>
+                  <span className="text-sm text-white">Voice Activity Detection</span>
+                  <p className="text-xs text-white/40">Filter silence for better accuracy</p>
                 </div>
-              )}
+                <button
+                  onClick={() => setUseVad(!useVad)}
+                  className={`w-10 h-5 rounded-full transition-colors ${
+                    useVad ? "bg-green-500" : "bg-white/20"
+                  }`}
+                >
+                  <div
+                    className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                      useVad ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
 
               {/* Error message */}
-              {downloadError && (
+              {modelError && (
                 <p className="text-xs text-red-400">
-                  Error: {downloadError}
+                  Error: {modelError}
                 </p>
               )}
 
               {/* Info */}
               <p className="text-xs text-white/30">
-                Works offline, English only (~480MB download)
+                Works offline. Whisper models support all languages; Parakeet is English only.
               </p>
             </div>
           )}

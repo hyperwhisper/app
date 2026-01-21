@@ -1,12 +1,17 @@
+mod audio;
+mod managers;
 mod resampler;
 
+use audio::VadProcessor;
 use chrono::Utc;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
+use managers::{
+    ModelManager, ModelStatus, SharedTranscriptionManager, AVAILABLE_MODELS,
+};
 use resampler::AudioResampler;
 use sha2::{Digest, Sha256};
 use std::fs;
-use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -37,6 +42,12 @@ pub struct AudioState {
     // Local transcription settings
     use_local_transcription: Arc<Mutex<bool>>,
     local_model_path: Arc<Mutex<Option<String>>>,
+    // Multi-model local transcription
+    active_local_model_id: Arc<Mutex<Option<String>>>,
+    model_manager: Arc<ModelManager>,
+    transcription_manager: SharedTranscriptionManager,
+    // VAD enabled flag
+    use_vad: Arc<Mutex<bool>>,
 }
 
 // D-Bus service for external control
@@ -538,31 +549,7 @@ fn find_builtin_microphone_id() -> Option<u32> {
     None
 }
 
-// Get the models directory path
-fn get_models_dir() -> Result<PathBuf, String> {
-    let data_dir = dirs::data_local_dir()
-        .ok_or_else(|| "Could not find local data directory".to_string())?;
-    let models_dir = data_dir.join("hyperwhisper").join("models").join("parakeet-eou");
-    Ok(models_dir)
-}
-
-// Local model status response
-#[derive(Clone, serde::Serialize)]
-pub struct LocalModelStatus {
-    pub downloaded: bool,
-    pub path: Option<String>,
-    pub downloading: bool,
-}
-
-// Download progress event
-#[derive(Clone, serde::Serialize)]
-pub struct DownloadProgress {
-    pub file: String,
-    pub progress: f64,
-    pub total_files: usize,
-    pub current_file: usize,
-}
-
+// Legacy local transcription settings (kept for backward compatibility)
 #[tauri::command]
 fn set_use_local_transcription(state: State<'_, AudioState>, enabled: bool) {
     *state.use_local_transcription.lock().unwrap() = enabled;
@@ -578,147 +565,187 @@ fn get_local_model_path(state: State<'_, AudioState>) -> Option<String> {
     state.local_model_path.lock().unwrap().clone()
 }
 
-#[tauri::command]
-fn check_local_model_status() -> Result<LocalModelStatus, String> {
-    let models_dir = get_models_dir()?;
+// ============================================================================
+// Multi-Model Management Commands
+// ============================================================================
 
-    // Check if all required files exist
-    let required_files = ["encoder.onnx", "decoder_joint.onnx", "tokenizer.json"];
-    let all_exist = required_files.iter().all(|f| models_dir.join(f).exists());
-
-    Ok(LocalModelStatus {
-        downloaded: all_exist,
-        path: if all_exist {
-            Some(models_dir.to_string_lossy().to_string())
-        } else {
-            None
-        },
-        downloading: false,
-    })
+/// Model info returned to frontend
+#[derive(Clone, serde::Serialize)]
+pub struct ModelInfoResponse {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub engine_type: String,
+    pub total_size_bytes: u64,
+    pub accuracy_score: f32,
+    pub speed_score: f32,
+    pub status: String,
 }
 
+/// List all available models with their status
 #[tauri::command]
-async fn download_local_model(app_handle: AppHandle) -> Result<String, String> {
-    let models_dir = get_models_dir()?;
+fn list_available_models(state: State<'_, AudioState>) -> Vec<ModelInfoResponse> {
+    AVAILABLE_MODELS
+        .iter()
+        .map(|m| {
+            let status = state.model_manager.get_model_status(m.id);
+            let status_str = match status {
+                ModelStatus::NotDownloaded => "not_downloaded".to_string(),
+                ModelStatus::Downloading { progress } => format!("downloading:{:.1}", progress),
+                ModelStatus::Downloaded => "downloaded".to_string(),
+                ModelStatus::Error { message } => format!("error:{}", message),
+            };
+            ModelInfoResponse {
+                id: m.id.to_string(),
+                name: m.name.to_string(),
+                description: m.description.to_string(),
+                engine_type: format!("{:?}", m.engine_type).to_lowercase(),
+                total_size_bytes: m.total_size_bytes,
+                accuracy_score: m.accuracy_score,
+                speed_score: m.speed_score,
+                status: status_str,
+            }
+        })
+        .collect()
+}
 
-    // Create models directory if it doesn't exist
-    if !models_dir.exists() {
-        fs::create_dir_all(&models_dir)
-            .map_err(|e| format!("Failed to create models directory: {}", e))?;
+/// Get status of a specific model
+#[tauri::command]
+fn get_model_status(state: State<'_, AudioState>, model_id: String) -> Result<String, String> {
+    let status = state.model_manager.get_model_status(&model_id);
+    match status {
+        ModelStatus::NotDownloaded => Ok("not_downloaded".to_string()),
+        ModelStatus::Downloading { progress } => Ok(format!("downloading:{:.1}", progress)),
+        ModelStatus::Downloaded => Ok("downloaded".to_string()),
+        ModelStatus::Error { message } => Ok(format!("error:{}", message)),
+    }
+}
+
+/// Download a model
+#[tauri::command]
+async fn download_model(
+    state: State<'_, AudioState>,
+    app_handle: AppHandle,
+    model_id: String,
+) -> Result<(), String> {
+    let model_manager = state.model_manager.clone();
+
+    // Run download in a blocking thread
+    tokio::task::spawn_blocking(move || {
+        model_manager.download_model(&model_id, &app_handle)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
+}
+
+/// Delete a model
+#[tauri::command]
+fn delete_model(state: State<'_, AudioState>, model_id: String) -> Result<(), String> {
+    // Unload if this is the active model
+    if state.transcription_manager.get_loaded_model_id().as_deref() == Some(&model_id) {
+        state.transcription_manager.unload_model();
     }
 
-    // Files to download from HuggingFace (altunenes/parakeet-rs repo has the ONNX files)
-    let files = vec![
-        ("encoder.onnx", "https://huggingface.co/altunenes/parakeet-rs/resolve/main/realtime_eou_120m-v1-onnx/encoder.onnx?download=true"),
-        ("decoder_joint.onnx", "https://huggingface.co/altunenes/parakeet-rs/resolve/main/realtime_eou_120m-v1-onnx/decoder_joint.onnx?download=true"),
-        ("tokenizer.json", "https://huggingface.co/altunenes/parakeet-rs/resolve/main/realtime_eou_120m-v1-onnx/tokenizer.json?download=true"),
-    ];
+    state.model_manager.delete_model(&model_id)
+}
 
-    let total_files = files.len();
-
-    // Create a ureq agent that follows redirects
-    let agent = ureq::AgentBuilder::new()
-        .redirects(10)
-        .build();
-
-    for (i, (filename, url)) in files.iter().enumerate() {
-        let file_path = models_dir.join(filename);
-
-        // Skip if file already exists
-        if file_path.exists() {
-            let _ = app_handle.emit(
-                "download-progress",
-                DownloadProgress {
-                    file: filename.to_string(),
-                    progress: 100.0,
-                    total_files,
-                    current_file: i + 1,
-                },
-            );
-            continue;
-        }
-
-        // Emit progress start
-        let _ = app_handle.emit(
-            "download-progress",
-            DownloadProgress {
-                file: filename.to_string(),
-                progress: 0.0,
-                total_files,
-                current_file: i + 1,
-            },
-        );
-
-        // Download file with redirect support
-        eprintln!("Downloading {} from {}", filename, url);
-        let response = agent.get(url)
-            .call()
-            .map_err(|e| format!("Failed to download {}: {}", filename, e))?;
-
-        let content_length = response
-            .header("Content-Length")
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(0);
-
-        // Create temp file for download
-        let temp_path = file_path.with_extension("tmp");
-        let mut file = fs::File::create(&temp_path)
-            .map_err(|e| format!("Failed to create file {}: {}", filename, e))?;
-
-        let mut reader = response.into_reader();
-        let mut buffer = [0u8; 8192];
-        let mut downloaded: u64 = 0;
-        let mut last_progress = 0.0;
-
-        loop {
-            let bytes_read = reader
-                .read(&mut buffer)
-                .map_err(|e| format!("Failed to read data for {}: {}", filename, e))?;
-
-            if bytes_read == 0 {
-                break;
-            }
-
-            file.write_all(&buffer[..bytes_read])
-                .map_err(|e| format!("Failed to write {}: {}", filename, e))?;
-
-            downloaded += bytes_read as u64;
-
-            // Emit progress every 1%
-            if content_length > 0 {
-                let progress = (downloaded as f64 / content_length as f64) * 100.0;
-                if progress - last_progress >= 1.0 {
-                    last_progress = progress;
-                    let _ = app_handle.emit(
-                        "download-progress",
-                        DownloadProgress {
-                            file: filename.to_string(),
-                            progress,
-                            total_files,
-                            current_file: i + 1,
-                        },
-                    );
-                }
-            }
-        }
-
-        // Rename temp file to final file
-        fs::rename(&temp_path, &file_path)
-            .map_err(|e| format!("Failed to rename {}: {}", filename, e))?;
-
-        // Emit completion
-        let _ = app_handle.emit(
-            "download-progress",
-            DownloadProgress {
-                file: filename.to_string(),
-                progress: 100.0,
-                total_files,
-                current_file: i + 1,
-            },
-        );
+/// Set the active local model
+#[tauri::command]
+fn set_active_model(state: State<'_, AudioState>, model_id: String) -> Result<(), String> {
+    // Verify model exists and is downloaded
+    if !state.model_manager.is_model_downloaded(&model_id) {
+        return Err(format!("Model {} is not downloaded", model_id));
     }
 
-    Ok(models_dir.to_string_lossy().to_string())
+    *state.active_local_model_id.lock().unwrap() = Some(model_id);
+    Ok(())
+}
+
+/// Get the active local model ID
+#[tauri::command]
+fn get_active_model(state: State<'_, AudioState>) -> Option<String> {
+    state.active_local_model_id.lock().unwrap().clone()
+}
+
+/// Load the active model into memory (for pre-loading)
+#[tauri::command]
+fn load_active_model(state: State<'_, AudioState>) -> Result<(), String> {
+    let model_id = state
+        .active_local_model_id
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("No active model set")?;
+
+    state.transcription_manager.load_model(&model_id)
+}
+
+/// Unload the current model from memory
+#[tauri::command]
+fn unload_model(state: State<'_, AudioState>) {
+    state.transcription_manager.unload_model();
+}
+
+/// Check if a model is currently loaded
+#[tauri::command]
+fn is_model_loaded(state: State<'_, AudioState>) -> bool {
+    state.transcription_manager.is_model_loaded()
+}
+
+/// Get the loaded model ID
+#[tauri::command]
+fn get_loaded_model(state: State<'_, AudioState>) -> Option<String> {
+    state.transcription_manager.get_loaded_model_id()
+}
+
+/// Set VAD enabled/disabled
+#[tauri::command]
+fn set_use_vad(state: State<'_, AudioState>, enabled: bool) {
+    *state.use_vad.lock().unwrap() = enabled;
+}
+
+/// Get VAD enabled state
+#[tauri::command]
+fn get_use_vad(state: State<'_, AudioState>) -> bool {
+    *state.use_vad.lock().unwrap()
+}
+
+// Legacy check for backward compatibility with old settings page
+#[tauri::command]
+fn check_local_model_status(state: State<'_, AudioState>) -> Result<serde_json::Value, String> {
+    // Check if any model is downloaded
+    let any_downloaded = AVAILABLE_MODELS
+        .iter()
+        .any(|m| state.model_manager.is_model_downloaded(m.id));
+
+    let active_model = state.active_local_model_id.lock().unwrap().clone();
+    let path = active_model
+        .as_ref()
+        .map(|id| state.model_manager.get_model_path(id).to_string_lossy().to_string());
+
+    Ok(serde_json::json!({
+        "downloaded": any_downloaded,
+        "path": path,
+        "downloading": false
+    }))
+}
+
+// Legacy download function - now redirects to download default model
+#[tauri::command]
+async fn download_local_model(
+    state: State<'_, AudioState>,
+    app_handle: AppHandle,
+) -> Result<String, String> {
+    // Download moonshine-base as the default (smallest and fastest)
+    let model_id = "moonshine-base";
+    let model_manager = state.model_manager.clone();
+
+    tokio::task::spawn_blocking(move || {
+        model_manager.download_model(model_id, &app_handle)?;
+        Ok(model_manager.get_model_path(model_id).to_string_lossy().to_string())
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?
 }
 
 // Helper function to get the audio input device
@@ -1123,7 +1150,6 @@ async fn start_recording(
 
     // Check if using local transcription
     let use_local = *state.use_local_transcription.lock().unwrap();
-    let local_model_path = state.local_model_path.lock().unwrap().clone();
 
     // Check if using Hyperwhisper server or direct Deepgram
     let use_hyperwhisper = *state.use_hyperwhisper_server.lock().unwrap();
@@ -1141,15 +1167,29 @@ async fn start_recording(
             .ok_or_else(|| "Deepgram API key not set".to_string())?
     };
 
-    // Validate local model path if using local transcription
-    if use_local {
-        let model_path = local_model_path.as_ref()
-            .ok_or_else(|| "Local model not configured. Please download the model first.".to_string())?;
-        let model_dir = PathBuf::from(model_path);
-        if !model_dir.join("encoder.onnx").exists() {
-            return Err("Local model not found. Please download the model first.".to_string());
+    // Validate local model if using local transcription
+    let active_model_id = if use_local {
+        let model_id = state
+            .active_local_model_id
+            .lock()
+            .unwrap()
+            .clone()
+            .ok_or_else(|| "No local model selected. Please select a model in settings.".to_string())?;
+
+        if !state.model_manager.is_model_downloaded(&model_id) {
+            return Err(format!("Model {} is not downloaded. Please download it first.", model_id));
         }
-    }
+
+        Some(model_id)
+    } else {
+        None
+    };
+
+    // Get VAD setting
+    let use_vad = *state.use_vad.lock().unwrap();
+
+    // Clone transcription manager for the thread
+    let transcription_manager = state.transcription_manager.0.clone();
 
     // Clear previous recording
     *state.recorded_samples.lock().unwrap() = Vec::new();
@@ -1196,8 +1236,10 @@ async fn start_recording(
     let auto_type = *state.auto_type_transcription.lock().unwrap();
 
     if use_local {
-        // Spawn local transcription thread using parakeet-rs
-        let model_path = local_model_path.unwrap();
+        // Spawn local transcription thread using multi-model transcription manager
+        // Uses "transcribe on stop" mode - accumulate audio, transcribe at end
+        let model_id = active_model_id.unwrap();
+
         thread::spawn(move || {
             // Helper to stop recording on error
             let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
@@ -1207,20 +1249,44 @@ async fn start_recording(
                 }
             };
 
-            // Load parakeet EOU model for streaming transcription
-            let mut parakeet = match parakeet_rs::ParakeetEOU::from_pretrained(&model_path, None) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("Failed to load local model: {}", e);
-                    let _ = app_handle_ws.emit("transcription-error", format!("Failed to load local model: {}", e));
-                    stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
-                    return;
+            eprintln!("Local transcription thread started for model: {}", model_id);
+
+            // Load the model if not already loaded
+            {
+                let mut manager = match transcription_manager.lock() {
+                    Ok(m) => m,
+                    Err(e) => {
+                        eprintln!("Failed to lock transcription manager: {}", e);
+                        let _ = app_handle_ws.emit("transcription-error", "Failed to access transcription engine");
+                        stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
+                        return;
+                    }
+                };
+
+                let currently_loaded = manager.get_loaded_model_id().map(|s| s.to_string());
+                eprintln!("Currently loaded model: {:?}, need: {}", currently_loaded, model_id);
+
+                if currently_loaded.as_deref() != Some(&model_id) {
+                    eprintln!("Loading model {}...", model_id);
+                    if let Err(e) = manager.load_model(&model_id) {
+                        eprintln!("Failed to load model {}: {}", model_id, e);
+                        let _ = app_handle_ws.emit("transcription-error", format!("Failed to load model: {}", e));
+                        stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
+                        return;
+                    }
+                    eprintln!("Model {} loaded successfully", model_id);
+                } else {
+                    eprintln!("Model {} already loaded", model_id);
                 }
-            };
+            }
 
             // Create resampler to convert device sample rate to 16kHz
+            eprintln!("Creating resampler from {}Hz to 16000Hz", sample_rate);
             let mut resampler = match AudioResampler::new(sample_rate) {
-                Ok(r) => r,
+                Ok(r) => {
+                    eprintln!("Resampler created successfully");
+                    r
+                }
                 Err(e) => {
                     eprintln!("Failed to create resampler: {}", e);
                     let _ = app_handle_ws.emit("transcription-error", format!("Failed to create resampler: {}", e));
@@ -1229,130 +1295,60 @@ async fn start_recording(
                 }
             };
 
-            // Buffer for accumulating resampled audio
-            // Larger chunks = better accuracy but higher latency
-            // 480ms chunks at 16kHz = 7680 samples (good balance for accuracy)
-            let chunk_size = 7680;
-            let mut audio_buffer: Vec<f32> = Vec::new();
-            let mut accumulated_text = String::new();
-            let mut last_emitted_text = String::new();
-
-            // Helper to clean up sentencepiece tokens (▁ -> space) and format text
-            let clean_token = |s: &str| -> String {
-                s.replace('▁', " ")
-                 .replace("<EOU>", "")
-                 .trim()
-                 .to_string()
+            // Optional VAD processor (energy-based, no model file needed)
+            let mut vad_processor: Option<VadProcessor> = if use_vad {
+                // Using simple energy-based VAD - no model file required
+                match VadProcessor::new(std::path::Path::new(""), 16000) {
+                    Ok(vad) => Some(vad),
+                    Err(e) => {
+                        eprintln!("VAD initialization failed, continuing without: {}", e);
+                        None
+                    }
+                }
+            } else {
+                None
             };
+
+            // Buffer for accumulating all audio (transcribe on stop mode)
+            let mut all_audio: Vec<f32> = Vec::new();
+            let mut audio_chunks_received: u32 = 0;
+
+            eprintln!("Entering main loop, waiting for audio...");
 
             loop {
                 // Check if we should stop
                 if !*is_recording_ws.lock().unwrap() {
-                    // Process any remaining audio
-                    if let Ok(final_samples) = resampler.flush() {
-                        audio_buffer.extend(final_samples);
-                    }
-
-                    if !audio_buffer.is_empty() {
-                        // Pad to chunk size if needed
-                        while audio_buffer.len() < chunk_size {
-                            audio_buffer.push(0.0);
-                        }
-
-                        // Final transcription with is_final=true
-                        if let Ok(token) = parakeet.transcribe(&audio_buffer, true) {
-                            if !token.is_empty() {
-                                accumulated_text.push_str(&token);
-                            }
-                        }
-                    }
-
-                    // Emit final accumulated text
-                    let final_text = clean_token(&accumulated_text);
-                    if !final_text.is_empty() && final_text != last_emitted_text {
-                        if auto_type {
-                            // Only type the new part
-                            let new_part = if final_text.starts_with(&last_emitted_text) {
-                                final_text[last_emitted_text.len()..].trim_start()
-                            } else {
-                                &final_text
-                            };
-                            if !new_part.is_empty() {
-                                let text_to_type = format!("{} ", new_part);
-                                let _ = type_text_internal(&text_to_type);
-                            }
-                        }
-                        let event = TranscriptionEvent {
-                            text: final_text,
-                            is_final: true,
-                        };
-                        let _ = app_handle_ws.emit("transcription", event);
-                    }
-
-                    // Notify frontend that transcription processing is complete
-                    let _ = app_handle_ws.emit("transcription-complete", ());
+                    eprintln!("Local transcription: stop signal received");
                     break;
                 }
 
                 // Receive audio data with timeout
                 match audio_rx.recv_timeout(Duration::from_millis(50)) {
                     Ok(samples) => {
-                        // Resample to 16kHz
-                        if let Ok(resampled) = resampler.process(&samples) {
-                            audio_buffer.extend(resampled);
+                        audio_chunks_received += 1;
+                        if audio_chunks_received <= 5 || audio_chunks_received % 100 == 0 {
+                            eprintln!("Local: received audio chunk #{} with {} samples", audio_chunks_received, samples.len());
                         }
-
-                        // Process complete chunks
-                        while audio_buffer.len() >= chunk_size {
-                            let chunk: Vec<f32> = audio_buffer.drain(..chunk_size).collect();
-
-                            // Streaming transcription with is_final=false
-                            match parakeet.transcribe(&chunk, false) {
-                                Ok(token) => {
-                                    // Check for end-of-utterance token
-                                    let has_eou = token.contains("<EOU>");
-
-                                    // Accumulate even empty tokens don't break the flow
-                                    if !token.is_empty() {
-                                        accumulated_text.push_str(&token);
-                                    }
-
-                                    // Clean and emit the accumulated text
-                                    let display_text = clean_token(&accumulated_text);
-
-                                    if !display_text.is_empty() && display_text != last_emitted_text {
-
-                                        if has_eou && auto_type {
-                                            // Type the new part on EOU
-                                            let new_part = if display_text.starts_with(&last_emitted_text) {
-                                                display_text[last_emitted_text.len()..].trim_start()
-                                            } else {
-                                                &display_text
-                                            };
-                                            if !new_part.is_empty() {
-                                                let text_to_type = format!("{} ", new_part);
-                                                let _ = type_text_internal(&text_to_type);
-                                            }
-                                        }
-
-                                        let event = TranscriptionEvent {
-                                            text: display_text.clone(),
-                                            is_final: has_eou,
-                                        };
-                                        let _ = app_handle_ws.emit("transcription", event);
-
-                                        last_emitted_text = display_text;
-
-                                        if has_eou {
-                                            // Reset for next utterance
-                                            accumulated_text.clear();
-                                            last_emitted_text.clear();
-                                        }
-                                    }
+                        // Resample to 16kHz
+                        match resampler.process(&samples) {
+                            Ok(resampled) => {
+                                if audio_chunks_received <= 5 {
+                                    eprintln!("Local: resampled to {} samples", resampled.len());
                                 }
-                                Err(e) => {
-                                    eprintln!("Local transcription error: {}", e);
+                                if let Some(ref mut vad) = vad_processor {
+                                    // VAD filters to speech-only audio
+                                    let speech = vad.process(&resampled);
+                                    if !speech.is_empty() {
+                                        eprintln!("Local: VAD detected speech: {} samples", speech.len());
+                                    }
+                                    all_audio.extend(speech);
+                                } else {
+                                    // No VAD - keep all audio
+                                    all_audio.extend(resampled);
                                 }
+                            }
+                            Err(e) => {
+                                eprintln!("Resampler error: {}", e);
                             }
                         }
                     }
@@ -1360,10 +1356,73 @@ async fn start_recording(
                         // No data, continue checking
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        eprintln!("Local: audio channel disconnected, processing final audio...");
+                        // Channel closed - process remaining audio
                         break;
                     }
                 }
             }
+
+            // Transcription happens here after loop exits (either from stop signal or channel disconnect)
+            eprintln!("Local transcription: loop exited, processing audio...");
+
+            // Emit processing state
+            let _ = app_handle_ws.emit("transcription-processing", ());
+
+            // Flush resampler
+            if let Ok(final_samples) = resampler.flush() {
+                eprintln!("Local: flushed {} samples from resampler", final_samples.len());
+                if let Some(ref mut vad) = vad_processor {
+                    let speech = vad.process(&final_samples);
+                    all_audio.extend(speech);
+                } else {
+                    all_audio.extend(final_samples);
+                }
+            }
+
+            // Flush VAD if used
+            if let Some(ref mut vad) = vad_processor {
+                let remaining = vad.flush();
+                eprintln!("Local: flushed {} samples from VAD", remaining.len());
+                all_audio.extend(remaining);
+            }
+
+            // Transcribe all accumulated audio at once
+            eprintln!("Local transcription: total accumulated {} samples ({:.1}s of audio)", all_audio.len(), all_audio.len() as f32 / 16000.0);
+            if !all_audio.is_empty() {
+                eprintln!("Transcribing {} samples...", all_audio.len());
+
+                let result = {
+                    let mut manager = transcription_manager.lock().unwrap();
+                    manager.transcribe(&all_audio)
+                };
+
+                match result {
+                    Ok(text) => {
+                        let text = text.trim().to_string();
+                        eprintln!("Transcription result: '{}'", text);
+                        if !text.is_empty() {
+                            if auto_type {
+                                let _ = type_text_internal(&format!("{} ", text));
+                            }
+                            let event = TranscriptionEvent {
+                                text,
+                                is_final: true,
+                            };
+                            let _ = app_handle_ws.emit("transcription", event);
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Transcription error: {}", e);
+                        let _ = app_handle_ws.emit("transcription-error", e);
+                    }
+                }
+            } else {
+                eprintln!("No audio to transcribe");
+            }
+
+            // Notify frontend that transcription processing is complete
+            let _ = app_handle_ws.emit("transcription-complete", ());
         });
     } else {
         // Spawn WebSocket thread for Deepgram or Hyperwhisper server
@@ -1688,6 +1747,14 @@ fn type_text(text: String) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize model manager
+    let model_manager = Arc::new(
+        ModelManager::new().expect("Failed to initialize model manager")
+    );
+
+    // Initialize transcription manager
+    let transcription_manager = SharedTranscriptionManager::new(model_manager.clone());
+
     let audio_state = AudioState {
         is_recording: Arc::new(Mutex::new(false)),
         recorded_samples: Arc::new(Mutex::new(Vec::new())),
@@ -1702,6 +1769,10 @@ pub fn run() {
         selected_device_id: Arc::new(Mutex::new(None)),
         use_local_transcription: Arc::new(Mutex::new(false)),
         local_model_path: Arc::new(Mutex::new(None)),
+        active_local_model_id: Arc::new(Mutex::new(None)),
+        model_manager,
+        transcription_manager,
+        use_vad: Arc::new(Mutex::new(true)), // VAD enabled by default
     };
 
     tauri::Builder::default()
@@ -1727,6 +1798,19 @@ pub fn run() {
             get_local_model_path,
             check_local_model_status,
             download_local_model,
+            // Multi-model management commands
+            list_available_models,
+            get_model_status,
+            download_model,
+            delete_model,
+            set_active_model,
+            get_active_model,
+            load_active_model,
+            unload_model,
+            is_model_loaded,
+            get_loaded_model,
+            set_use_vad,
+            get_use_vad,
         ])
         .setup(|app| {
             let handle = app.handle().clone();

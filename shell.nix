@@ -38,6 +38,13 @@ in pkgs.mkShell {
     alsa-lib
     libxkbcommon
 
+    # Vulkan SDK for whisper.cpp/ggml (optional GPU acceleration)
+    vulkan-headers
+    vulkan-loader
+    vulkan-tools
+    vulkan-validation-layers
+    shaderc  # provides glslc for shader compilation
+
     # Video/Audio data composition framework tools like "gst-inspect", "gst-launch" ...
     gst_all_1.gstreamer
     # Common plugins like "filesrc" to combine within e.g. gst-launch
@@ -57,4 +64,8 @@ in pkgs.mkShell {
 
   # Set LIBCLANG_PATH for whisper-rs bindgen
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
+
+  # Set Vulkan SDK path for whisper.cpp/ggml build
+  VULKAN_SDK = "${pkgs.vulkan-headers}";
+  VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
 }

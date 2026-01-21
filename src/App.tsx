@@ -101,6 +101,35 @@ function App() {
     }
   }, [apiKey]);
 
+  // Sync local transcription settings to backend on startup
+  useEffect(() => {
+    const syncLocalTranscriptionSettings = async () => {
+      const provider = localStorage.getItem("transcription_provider") ||
+        (localStorage.getItem("use_hyperwhisper_server") !== "false" ? "hyperwhisper" : "deepgram");
+
+      const useLocal = provider === "local";
+      await invoke("set_use_local_transcription", { enabled: useLocal });
+
+      if (useLocal) {
+        // Also sync the active model ID
+        const activeModelId = localStorage.getItem("active_local_model_id");
+        if (activeModelId) {
+          try {
+            await invoke("set_active_model", { modelId: activeModelId });
+          } catch (e) {
+            console.error("Failed to set active model on startup:", e);
+          }
+        }
+
+        // Sync VAD setting
+        const useVad = localStorage.getItem("use_vad") !== "false";
+        await invoke("set_use_vad", { enabled: useVad });
+      }
+    };
+
+    syncLocalTranscriptionSettings();
+  }, []);
+
   useEffect(() => {
     localStorage.setItem("auto_type_enabled", String(autoTypeEnabled));
   }, [autoTypeEnabled]);

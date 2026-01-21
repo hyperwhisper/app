@@ -33,9 +33,11 @@ zbus = "4"
 ureq = { version = "2", features = ["json"] }
 sha2 = "0.10"
 hex = "0.4"
-parakeet-rs = "0.2"
 rubato = "0.15"
 clap = { version = "4", features = ["derive"] }
+# Multi-model local transcription
+transcribe-rs = { version = "0.2", features = ["whisper", "parakeet", "moonshine"] }
+# Note: silero-vad-rs has ort version conflict with transcribe-rs, using simple energy-based VAD instead
 
 [dependencies.async-trait]
 version = "0.1"
