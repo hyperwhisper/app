@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Simple energy-based Voice Activity Detection processor
 ///
@@ -71,14 +70,6 @@ impl VadProcessor {
 
         // Adaptive threshold: speech is detected when energy is significantly above noise floor
         let is_speech = energy > threshold_value;
-
-        // Debug logging (only occasionally to avoid spam)
-        static FRAME_COUNT: AtomicU32 = AtomicU32::new(0);
-        let count = FRAME_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-        if count <= 10 || count % 100 == 0 {
-            eprintln!("VAD frame {}: energy={:.6}, noise_floor={:.6}, threshold={:.6}, is_speech={}",
-                count, energy, self.noise_floor, threshold_value, is_speech);
-        }
 
         // Update noise floor estimate during silence
         if !is_speech && !self.in_speech {

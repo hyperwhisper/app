@@ -18,43 +18,32 @@ impl LoadedEngine {
     /// Transcribe audio samples (expects 16kHz mono f32 audio)
     /// Writes to a temp WAV file and uses transcribe_file API
     fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
-        eprintln!("LoadedEngine::transcribe called with {} samples", samples.len());
-
         // Create temp WAV file
         let temp_dir = std::env::temp_dir();
         let temp_path = temp_dir.join(format!("hyperwhisper_temp_{}.wav", std::process::id()));
-
-        eprintln!("Writing temp WAV file to {:?}", temp_path);
 
         // Write WAV file
         write_wav_file(&temp_path, samples, 16000)
             .map_err(|e| format!("Failed to write temp WAV: {}", e))?;
 
-        eprintln!("Temp WAV file written, starting transcription...");
-
         // Transcribe using the engine
         let result = match self {
             LoadedEngine::Whisper(engine) => {
-                eprintln!("Using Whisper engine");
                 engine
                     .transcribe_file(&temp_path, None)
                     .map_err(|e| format!("Whisper transcription error: {}", e))
             }
             LoadedEngine::Parakeet(engine) => {
-                eprintln!("Using Parakeet engine");
                 engine
                     .transcribe_file(&temp_path, None)
                     .map_err(|e| format!("Parakeet transcription error: {}", e))
             }
             LoadedEngine::Moonshine(engine) => {
-                eprintln!("Using Moonshine engine");
                 engine
                     .transcribe_file(&temp_path, None)
                     .map_err(|e| format!("Moonshine transcription error: {}", e))
             }
         };
-
-        eprintln!("Transcription result: {:?}", result);
 
         // Clean up temp file
         let _ = std::fs::remove_file(&temp_path);
@@ -153,16 +142,12 @@ impl TranscriptionManager {
 
         let model_path = self.model_manager.get_model_path(model_id);
 
-        eprintln!("Loading model {} from {:?}", model_id, model_path);
-
         // Load the appropriate engine based on model type
         let engine = match model_info.engine_type {
             EngineType::Whisper => {
                 let files = model_info.get_files();
                 let model_file = files.first().ok_or("No model file defined")?;
                 let full_path = model_path.join(model_file.filename);
-
-                eprintln!("Loading Whisper model from {:?}", full_path);
 
                 let mut whisper = WhisperEngine::new();
                 whisper
@@ -172,8 +157,6 @@ impl TranscriptionManager {
                 LoadedEngine::Whisper(whisper)
             }
             EngineType::Parakeet => {
-                eprintln!("Loading Parakeet model from {:?}", model_path);
-
                 let mut parakeet = ParakeetEngine::new();
                 // Use int8 quantized models
                 let params = ParakeetModelParams {
@@ -186,8 +169,6 @@ impl TranscriptionManager {
                 LoadedEngine::Parakeet(parakeet)
             }
             EngineType::Moonshine => {
-                eprintln!("Loading Moonshine model from {:?}", model_path);
-
                 let mut moonshine = MoonshineEngine::new();
                 moonshine
                     .load_model(&model_path)
@@ -200,7 +181,6 @@ impl TranscriptionManager {
         self.loaded_engine = Some(engine);
         self.current_model_id = Some(model_id.to_string());
 
-        eprintln!("Model {} loaded successfully", model_id);
         Ok(())
     }
 

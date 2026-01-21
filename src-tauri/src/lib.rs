@@ -1249,46 +1249,31 @@ async fn start_recording(
                 }
             };
 
-            eprintln!("Local transcription thread started for model: {}", model_id);
-
             // Load the model if not already loaded
             {
                 let mut manager = match transcription_manager.lock() {
                     Ok(m) => m,
                     Err(e) => {
-                        eprintln!("Failed to lock transcription manager: {}", e);
-                        let _ = app_handle_ws.emit("transcription-error", "Failed to access transcription engine");
+                        let _ = app_handle_ws.emit("transcription-error", format!("Failed to access transcription engine: {}", e));
                         stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                         return;
                     }
                 };
 
                 let currently_loaded = manager.get_loaded_model_id().map(|s| s.to_string());
-                eprintln!("Currently loaded model: {:?}, need: {}", currently_loaded, model_id);
-
                 if currently_loaded.as_deref() != Some(&model_id) {
-                    eprintln!("Loading model {}...", model_id);
                     if let Err(e) = manager.load_model(&model_id) {
-                        eprintln!("Failed to load model {}: {}", model_id, e);
                         let _ = app_handle_ws.emit("transcription-error", format!("Failed to load model: {}", e));
                         stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                         return;
                     }
-                    eprintln!("Model {} loaded successfully", model_id);
-                } else {
-                    eprintln!("Model {} already loaded", model_id);
                 }
             }
 
             // Create resampler to convert device sample rate to 16kHz
-            eprintln!("Creating resampler from {}Hz to 16000Hz", sample_rate);
             let mut resampler = match AudioResampler::new(sample_rate) {
-                Ok(r) => {
-                    eprintln!("Resampler created successfully");
-                    r
-                }
+                Ok(r) => r,
                 Err(e) => {
-                    eprintln!("Failed to create resampler: {}", e);
                     let _ = app_handle_ws.emit("transcription-error", format!("Failed to create resampler: {}", e));
                     stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                     return;
@@ -1297,58 +1282,32 @@ async fn start_recording(
 
             // Optional VAD processor (energy-based, no model file needed)
             let mut vad_processor: Option<VadProcessor> = if use_vad {
-                // Using simple energy-based VAD - no model file required
-                match VadProcessor::new(std::path::Path::new(""), 16000) {
-                    Ok(vad) => Some(vad),
-                    Err(e) => {
-                        eprintln!("VAD initialization failed, continuing without: {}", e);
-                        None
-                    }
-                }
+                VadProcessor::new(std::path::Path::new(""), 16000).ok()
             } else {
                 None
             };
 
             // Buffer for accumulating all audio (transcribe on stop mode)
             let mut all_audio: Vec<f32> = Vec::new();
-            let mut audio_chunks_received: u32 = 0;
-
-            eprintln!("Entering main loop, waiting for audio...");
 
             loop {
                 // Check if we should stop
                 if !*is_recording_ws.lock().unwrap() {
-                    eprintln!("Local transcription: stop signal received");
                     break;
                 }
 
                 // Receive audio data with timeout
                 match audio_rx.recv_timeout(Duration::from_millis(50)) {
                     Ok(samples) => {
-                        audio_chunks_received += 1;
-                        if audio_chunks_received <= 5 || audio_chunks_received % 100 == 0 {
-                            eprintln!("Local: received audio chunk #{} with {} samples", audio_chunks_received, samples.len());
-                        }
                         // Resample to 16kHz
-                        match resampler.process(&samples) {
-                            Ok(resampled) => {
-                                if audio_chunks_received <= 5 {
-                                    eprintln!("Local: resampled to {} samples", resampled.len());
-                                }
-                                if let Some(ref mut vad) = vad_processor {
-                                    // VAD filters to speech-only audio
-                                    let speech = vad.process(&resampled);
-                                    if !speech.is_empty() {
-                                        eprintln!("Local: VAD detected speech: {} samples", speech.len());
-                                    }
-                                    all_audio.extend(speech);
-                                } else {
-                                    // No VAD - keep all audio
-                                    all_audio.extend(resampled);
-                                }
-                            }
-                            Err(e) => {
-                                eprintln!("Resampler error: {}", e);
+                        if let Ok(resampled) = resampler.process(&samples) {
+                            if let Some(ref mut vad) = vad_processor {
+                                // VAD filters to speech-only audio
+                                let speech = vad.process(&resampled);
+                                all_audio.extend(speech);
+                            } else {
+                                // No VAD - keep all audio
+                                all_audio.extend(resampled);
                             }
                         }
                     }
@@ -1356,7 +1315,6 @@ async fn start_recording(
                         // No data, continue checking
                     }
                     Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                        eprintln!("Local: audio channel disconnected, processing final audio...");
                         // Channel closed - process remaining audio
                         break;
                     }
@@ -1364,14 +1322,12 @@ async fn start_recording(
             }
 
             // Transcription happens here after loop exits (either from stop signal or channel disconnect)
-            eprintln!("Local transcription: loop exited, processing audio...");
 
             // Emit processing state
             let _ = app_handle_ws.emit("transcription-processing", ());
 
             // Flush resampler
             if let Ok(final_samples) = resampler.flush() {
-                eprintln!("Local: flushed {} samples from resampler", final_samples.len());
                 if let Some(ref mut vad) = vad_processor {
                     let speech = vad.process(&final_samples);
                     all_audio.extend(speech);
@@ -1383,15 +1339,11 @@ async fn start_recording(
             // Flush VAD if used
             if let Some(ref mut vad) = vad_processor {
                 let remaining = vad.flush();
-                eprintln!("Local: flushed {} samples from VAD", remaining.len());
                 all_audio.extend(remaining);
             }
 
             // Transcribe all accumulated audio at once
-            eprintln!("Local transcription: total accumulated {} samples ({:.1}s of audio)", all_audio.len(), all_audio.len() as f32 / 16000.0);
             if !all_audio.is_empty() {
-                eprintln!("Transcribing {} samples...", all_audio.len());
-
                 let result = {
                     let mut manager = transcription_manager.lock().unwrap();
                     manager.transcribe(&all_audio)
@@ -1400,7 +1352,6 @@ async fn start_recording(
                 match result {
                     Ok(text) => {
                         let text = text.trim().to_string();
-                        eprintln!("Transcription result: '{}'", text);
                         if !text.is_empty() {
                             if auto_type {
                                 let _ = type_text_internal(&format!("{} ", text));
@@ -1413,12 +1364,9 @@ async fn start_recording(
                         }
                     }
                     Err(e) => {
-                        eprintln!("Transcription error: {}", e);
                         let _ = app_handle_ws.emit("transcription-error", e);
                     }
                 }
-            } else {
-                eprintln!("No audio to transcribe");
             }
 
             // Notify frontend that transcription processing is complete
