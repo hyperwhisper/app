@@ -115,29 +115,19 @@ impl ModelInfo {
             ],
             "moonshine-base" => vec![
                 ModelFile {
-                    filename: "preprocess.onnx",
-                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/base/preprocess.onnx",
-                    size_bytes: 500_000,
+                    filename: "encoder_model.onnx",
+                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float/encoder_model.onnx",
+                    size_bytes: 80_800_000,
                 },
                 ModelFile {
-                    filename: "encode.onnx",
-                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/base/encode.onnx",
-                    size_bytes: 50_000_000,
-                },
-                ModelFile {
-                    filename: "uncached_decode.onnx",
-                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/base/uncached_decode.onnx",
-                    size_bytes: 4_000_000,
-                },
-                ModelFile {
-                    filename: "cached_decode.onnx",
-                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/base/cached_decode.onnx",
-                    size_bytes: 3_000_000,
+                    filename: "decoder_model_merged.onnx",
+                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float/decoder_model_merged.onnx",
+                    size_bytes: 166_000_000,
                 },
                 ModelFile {
                     filename: "tokenizer.json",
-                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/tokenizer.json",
-                    size_bytes: 800_000,
+                    url: "https://huggingface.co/UsefulSensors/moonshine/resolve/main/onnx/merged/base/float/tokenizer.json",
+                    size_bytes: 3_760_000,
                 },
             ],
             _ => vec![],
@@ -212,7 +202,7 @@ pub static AVAILABLE_MODELS: &[ModelInfo] = &[
         name: "Moonshine Base",
         description: "Very fast, handles accents well.",
         engine_type: EngineType::Moonshine,
-        total_size_bytes: 58_000_000,
+        total_size_bytes: 251_000_000, // encoder + decoder + tokenizer
         is_directory: true,
         accuracy_score: 0.75,
         speed_score: 0.95,
