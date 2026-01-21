@@ -1,0 +1,12 @@
+
+services:
+  builder:
+    restart: unless-stopped
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    command: sleep inf
+    volumes:
+      - ./:/app
+    working_dir: /app
+

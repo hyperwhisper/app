@@ -25,6 +25,23 @@ RUN set -ex \
     libclang-dev \
     curl \
     unzip \
+    libxkbcommon-dev \
+    libatk1.0-dev \
+    libatk-bridge2.0-dev \
+    libgirepository1.0-dev \
+    libgstreamer1.0-dev \
+    libgstreamer-plugins-base1.0-dev \
+    gstreamer1.0-plugins-base \
+    gstreamer1.0-plugins-good \
+    gstreamer1.0-plugins-bad \
+    gstreamer1.0-plugins-ugly \
+    gstreamer1.0-libav \
+    gstreamer1.0-vaapi \
+    wtype \
+    libvulkan-dev \
+    vulkan-tools \
+    glslc \
+    spirv-tools \
   && rm -rf /var/lib/apt/lists/*
 
 # Install bun
