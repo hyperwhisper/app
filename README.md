@@ -61,6 +61,9 @@ nix build
 - For Fedora:
 
   ```sh
+  # dnf install ydotool
+  # ydotool
+  # user needs to be in input group
   sudo dnf install gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free
   ```
 
