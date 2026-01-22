@@ -1693,6 +1693,84 @@ fn type_text(text: String) -> Result<(), String> {
     type_text_internal(&text)
 }
 
+/// Query dconf for the keybinding associated with hyperwhisper
+/// Returns the keybinding string (e.g., "<Super>m") or None if not found
+#[tauri::command]
+fn get_keybinding() -> Option<String> {
+    use std::process::Command;
+
+    // Run dconf dump / to get all settings
+    let output = Command::new("dconf")
+        .args(["dump", "/"])
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let dump = String::from_utf8_lossy(&output.stdout);
+
+    // Search patterns for hyperwhisper keybindings
+    let search_patterns = [
+        "hyperwhisper",
+        "ToggleRecording",
+        "dev.hyperwhisper",
+    ];
+
+    // Parse dconf dump format - it's INI-like with [path] sections
+    // First, split into sections and find the one containing hyperwhisper
+    let mut sections: Vec<(String, Vec<&str>)> = Vec::new();
+    let mut current_section = String::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+
+    for line in dump.lines() {
+        let line = line.trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            // Save previous section
+            if !current_section.is_empty() {
+                sections.push((current_section.clone(), current_lines.clone()));
+            }
+            current_section = line[1..line.len() - 1].to_string();
+            current_lines = Vec::new();
+        } else if !line.is_empty() {
+            current_lines.push(line);
+        }
+    }
+    // Don't forget the last section
+    if !current_section.is_empty() {
+        sections.push((current_section, current_lines));
+    }
+
+    // Find sections that contain hyperwhisper in any line
+    for (section_name, lines) in &sections {
+        let section_text = lines.join("\n");
+        let has_pattern = search_patterns.iter().any(|p|
+            section_name.to_lowercase().contains(&p.to_lowercase()) ||
+            section_text.to_lowercase().contains(&p.to_lowercase())
+        );
+
+        if has_pattern {
+            // Look for binding= in this section
+            for line in lines {
+                if let Some(eq_pos) = line.find('=') {
+                    let key = line[..eq_pos].trim().to_lowercase();
+                    let value = line[eq_pos + 1..].trim();
+
+                    if key == "binding" {
+                        let cleaned = value.trim_matches('\'').trim_matches('"');
+                        if !cleaned.is_empty() && cleaned != "disabled" && cleaned != "[]" {
+                            return Some(cleaned.to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // Initialize model manager
@@ -1759,6 +1837,7 @@ pub fn run() {
             get_loaded_model,
             set_use_vad,
             get_use_vad,
+            get_keybinding,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
