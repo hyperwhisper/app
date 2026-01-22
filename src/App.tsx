@@ -56,6 +56,11 @@ function App() {
   // Keybinding display
   const [keybinding, setKeybinding] = useState<string | null>(null);
 
+  // Bar position (top or bottom)
+  const [barPosition, setBarPosition] = useState<'top' | 'bottom'>(() =>
+    (localStorage.getItem("bar_position") as 'top' | 'bottom') || 'bottom'
+  );
+
   // Toast notification state
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
@@ -170,6 +175,18 @@ function App() {
   useEffect(() => {
     localStorage.setItem("auto_type_enabled", String(autoTypeEnabled));
   }, [autoTypeEnabled]);
+
+  // Listen for settings changes (from settings window)
+  useEffect(() => {
+    const unlisten = listen("settings-changed", () => {
+      // Re-read bar position from localStorage
+      const newPosition = (localStorage.getItem("bar_position") as 'top' | 'bottom') || 'bottom';
+      setBarPosition(newPosition);
+    });
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
 
   // Fetch keybinding from dconf on startup
   useEffect(() => {
@@ -557,6 +574,115 @@ function App() {
         </div>
       )}
 
+      {/* Control bar - shown at top when barPosition is 'top' */}
+      {barPosition === 'top' && (
+        <div className="h-14 bg-neutral-900/80 flex items-center justify-between px-4">
+          {/* Left: Recording status */}
+          <div className="flex items-center gap-2">
+            {isRecording ? (
+              <>
+                <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-white font-medium text-sm">Recording</span>
+              </>
+            ) : isProcessing ? (
+              <>
+                <div className="w-4 h-4 rounded-full bg-amber-500 animate-pulse" />
+                <span className="text-white/80 text-sm">Processing...</span>
+              </>
+            ) : isTrialInitializing ? (
+              <>
+                <div className="w-4 h-4 rounded-full bg-blue-500 animate-pulse" />
+                <span className="text-white/60 text-sm">Initializing...</span>
+              </>
+            ) : (
+              <>
+                <SettingsDialog disabled={isRecording || isProcessing} tooltipPosition="bottom" />
+                <span className="text-white/60 text-sm">Ready</span>
+              </>
+            )}
+          </div>
+
+          {/* Right: Controls */}
+          <div className="flex items-center gap-3">
+            {/* Auto-type toggle */}
+            <div className="relative group">
+              <button
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  setAutoTypeEnabled(!autoTypeEnabled);
+                }}
+                disabled={isRecording || isProcessing}
+                className={`flex items-center gap-1.5 text-xs transition-colors ${
+                  isRecording || isProcessing
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:text-white/80"
+                } ${autoTypeEnabled ? "text-white/80" : "text-white/40"}`}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2"/>
+                  <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>
+                </svg>
+                <div className={`w-6 h-3 rounded-full transition-colors ${autoTypeEnabled ? "bg-green-500" : "bg-white/20"}`}>
+                  <div className={`w-2.5 h-2.5 rounded-full bg-white mt-[1px] transition-transform ${autoTypeEnabled ? "translate-x-3" : "translate-x-0.5"}`} />
+                </div>
+              </button>
+              <div className="absolute top-full left-1/2 -translate-x-1/2 mt-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                {autoTypeEnabled ? "Auto-type enabled" : "Auto-type disabled"}
+              </div>
+            </div>
+
+            {isRecording ? (
+              <div className="relative group">
+                <button
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    handleRecord();
+                  }}
+                  className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <rect x="6" y="6" width="12" height="12" rx="1" />
+                  </svg>
+                </button>
+                <div className="absolute top-full right-0 mt-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                  Stop recording
+                </div>
+              </div>
+            ) : (
+              <div className="relative group">
+                <button
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (!isProcessing) handleRecord();
+                  }}
+                  disabled={isProcessing}
+                  className={`p-2 rounded-md transition-colors ${
+                    isProcessing
+                      ? "text-white/30 cursor-not-allowed"
+                      : "text-white/80 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="2" width="6" height="11" rx="3" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="22" />
+                  </svg>
+                </button>
+                <div className="absolute top-full right-0 mt-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none flex flex-col items-center">
+                  <span>{isProcessing ? "Processing..." : "Start recording"}</span>
+                  {keybinding && (
+                    <span className="text-white/50">{formatKeybinding(keybinding)}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Waveform area */}
       <div className="flex-1 flex items-center justify-center px-8 relative">
         {connectionError ? (
@@ -640,112 +766,114 @@ function App() {
         )}
       </div>
 
-      {/* Bottom bar */}
-      <div className="h-14 bg-neutral-900/80 flex items-center justify-between px-4">
-        {/* Left: Recording status */}
-        <div className="flex items-center gap-2">
-          {isRecording ? (
-            <>
-              <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
-              <span className="text-white font-medium text-sm">Recording</span>
-            </>
-          ) : isProcessing ? (
-            <>
-              <div className="w-4 h-4 rounded-full bg-amber-500 animate-pulse" />
-              <span className="text-white/80 text-sm">Processing...</span>
-            </>
-          ) : isTrialInitializing ? (
-            <>
-              <div className="w-4 h-4 rounded-full bg-blue-500 animate-pulse" />
-              <span className="text-white/60 text-sm">Initializing...</span>
-            </>
-          ) : (
-            <>
-              <SettingsDialog disabled={isRecording || isProcessing} />
-              <span className="text-white/60 text-sm">Ready</span>
-            </>
-          )}
-        </div>
-
-        {/* Right: Controls */}
-        <div className="flex items-center gap-3">
-          {/* Auto-type toggle */}
-          <div className="relative group">
-            <button
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                e.preventDefault();
-                setAutoTypeEnabled(!autoTypeEnabled);
-              }}
-              disabled={isRecording || isProcessing}
-              className={`flex items-center gap-1.5 text-xs transition-colors ${
-                isRecording || isProcessing
-                  ? "opacity-50 cursor-not-allowed"
-                  : "hover:text-white/80"
-              } ${autoTypeEnabled ? "text-white/80" : "text-white/40"}`}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <rect x="2" y="4" width="20" height="16" rx="2"/>
-                <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>
-              </svg>
-              <div className={`w-6 h-3 rounded-full transition-colors ${autoTypeEnabled ? "bg-green-500" : "bg-white/20"}`}>
-                <div className={`w-2.5 h-2.5 rounded-full bg-white mt-[1px] transition-transform ${autoTypeEnabled ? "translate-x-3" : "translate-x-0.5"}`} />
-              </div>
-            </button>
-            <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-              {autoTypeEnabled ? "Auto-type enabled" : "Auto-type disabled"}
-            </div>
+      {/* Control bar - shown at bottom when barPosition is 'bottom' */}
+      {barPosition === 'bottom' && (
+        <div className="h-14 bg-neutral-900/80 flex items-center justify-between px-4">
+          {/* Left: Recording status */}
+          <div className="flex items-center gap-2">
+            {isRecording ? (
+              <>
+                <div className="w-4 h-4 rounded-full bg-red-500 animate-pulse" />
+                <span className="text-white font-medium text-sm">Recording</span>
+              </>
+            ) : isProcessing ? (
+              <>
+                <div className="w-4 h-4 rounded-full bg-amber-500 animate-pulse" />
+                <span className="text-white/80 text-sm">Processing...</span>
+              </>
+            ) : isTrialInitializing ? (
+              <>
+                <div className="w-4 h-4 rounded-full bg-blue-500 animate-pulse" />
+                <span className="text-white/60 text-sm">Initializing...</span>
+              </>
+            ) : (
+              <>
+                <SettingsDialog disabled={isRecording || isProcessing} tooltipPosition="top" />
+                <span className="text-white/60 text-sm">Ready</span>
+              </>
+            )}
           </div>
 
-          {isRecording ? (
+          {/* Right: Controls */}
+          <div className="flex items-center gap-3">
+            {/* Auto-type toggle */}
             <div className="relative group">
               <button
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  handleRecord();
+                  setAutoTypeEnabled(!autoTypeEnabled);
                 }}
-                className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
+                disabled={isRecording || isProcessing}
+                className={`flex items-center gap-1.5 text-xs transition-colors ${
+                  isRecording || isProcessing
+                    ? "opacity-50 cursor-not-allowed"
+                    : "hover:text-white/80"
+                } ${autoTypeEnabled ? "text-white/80" : "text-white/40"}`}
               >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-                  <rect x="6" y="6" width="12" height="12" rx="1" />
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2"/>
+                  <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M7 16h10"/>
                 </svg>
+                <div className={`w-6 h-3 rounded-full transition-colors ${autoTypeEnabled ? "bg-green-500" : "bg-white/20"}`}>
+                  <div className={`w-2.5 h-2.5 rounded-full bg-white mt-[1px] transition-transform ${autoTypeEnabled ? "translate-x-3" : "translate-x-0.5"}`} />
+                </div>
               </button>
-              <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
-                Stop recording
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                {autoTypeEnabled ? "Auto-type enabled" : "Auto-type disabled"}
               </div>
             </div>
-          ) : (
-            <div className="relative group">
-              <button
-                onMouseDown={(e) => {
-                  e.stopPropagation();
-                  e.preventDefault();
-                  if (!isProcessing) handleRecord();
-                }}
-                disabled={isProcessing}
-                className={`p-2 rounded-md transition-colors ${
-                  isProcessing
-                    ? "text-white/30 cursor-not-allowed"
-                    : "text-white/80 hover:text-white hover:bg-white/10"
-                }`}
-              >
-                <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="9" y="2" width="6" height="11" rx="3" />
-                  <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                  <line x1="12" y1="19" x2="12" y2="22" />
-                </svg>
-              </button>
-              <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none flex flex-col items-center">
-                <span>{isProcessing ? "Processing..." : "Start recording"}</span>
-                {keybinding && (
-                  <span className="text-white/50">{formatKeybinding(keybinding)}</span>
-                )}
+
+            {isRecording ? (
+              <div className="relative group">
+                <button
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    handleRecord();
+                  }}
+                  className="p-2 text-white/80 hover:text-white hover:bg-white/10 rounded-md transition-colors"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+                    <rect x="6" y="6" width="12" height="12" rx="1" />
+                  </svg>
+                </button>
+                <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+                  Stop recording
+                </div>
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="relative group">
+                <button
+                  onMouseDown={(e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    if (!isProcessing) handleRecord();
+                  }}
+                  disabled={isProcessing}
+                  className={`p-2 rounded-md transition-colors ${
+                    isProcessing
+                      ? "text-white/30 cursor-not-allowed"
+                      : "text-white/80 hover:text-white hover:bg-white/10"
+                  }`}
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="2" width="6" height="11" rx="3" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="22" />
+                  </svg>
+                </button>
+                <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none flex flex-col items-center">
+                  <span>{isProcessing ? "Processing..." : "Start recording"}</span>
+                  {keybinding && (
+                    <span className="text-white/50">{formatKeybinding(keybinding)}</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </main>
   );
 }

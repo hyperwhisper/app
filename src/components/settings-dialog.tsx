@@ -4,9 +4,10 @@ import { Button } from "@/components/ui/button";
 
 interface SettingsDialogProps {
   disabled?: boolean;
+  tooltipPosition?: 'top' | 'bottom';
 }
 
-export function SettingsDialog({ disabled = false }: SettingsDialogProps) {
+export function SettingsDialog({ disabled = false, tooltipPosition = 'top' }: SettingsDialogProps) {
   const openSettingsWindow = async () => {
     // Check if settings window already exists
     const existingWindow = await WebviewWindow.getByLabel("settings");
@@ -49,7 +50,9 @@ export function SettingsDialog({ disabled = false }: SettingsDialogProps) {
         <Settings className="h-4 w-4" />
         <span className="sr-only">Settings</span>
       </Button>
-      <div className="absolute bottom-full left-0 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none">
+      <div className={`absolute left-0 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none ${
+        tooltipPosition === 'bottom' ? 'top-full mt-2' : 'bottom-full mb-2'
+      }`}>
         Settings
       </div>
     </div>

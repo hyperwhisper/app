@@ -98,6 +98,11 @@ export function SettingsPage() {
   );
   const [showAllModels, setShowAllModels] = useState(false);
 
+  // Appearance settings
+  const [barPosition, setBarPosition] = useState<'top' | 'bottom'>(() =>
+    (localStorage.getItem("bar_position") as 'top' | 'bottom') || 'bottom'
+  );
+
   // Disable right-click context menu
   useEffect(() => {
     const handleContextMenu = (e: MouseEvent) => e.preventDefault();
@@ -226,6 +231,12 @@ export function SettingsPage() {
     localStorage.setItem("use_vad", String(useVad));
     invoke("set_use_vad", { enabled: useVad });
   }, [useVad]);
+
+  // Save bar position setting
+  useEffect(() => {
+    localStorage.setItem("bar_position", barPosition);
+    emit("settings-changed");
+  }, [barPosition]);
 
   // Load audio devices and app version
   useEffect(() => {
@@ -769,6 +780,41 @@ export function SettingsPage() {
               </p>
             </div>
           )}
+
+          {/* Appearance */}
+          <div className="space-y-2">
+            <Label className="text-xs uppercase tracking-wide text-white/50">
+              Appearance
+            </Label>
+            <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+              <div>
+                <span className="text-sm text-white">Control Bar Position</span>
+                <p className="text-xs text-white/40">Show controls at top or bottom</p>
+              </div>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setBarPosition('top')}
+                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                    barPosition === 'top'
+                      ? "bg-white/15 text-white"
+                      : "bg-white/5 text-white/50 hover:bg-white/10"
+                  }`}
+                >
+                  Top
+                </button>
+                <button
+                  onClick={() => setBarPosition('bottom')}
+                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
+                    barPosition === 'bottom'
+                      ? "bg-white/15 text-white"
+                      : "bg-white/5 text-white/50 hover:bg-white/10"
+                  }`}
+                >
+                  Bottom
+                </button>
+              </div>
+            </div>
+          </div>
 
           {/* Version */}
           {appVersion && (
