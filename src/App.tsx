@@ -56,6 +56,20 @@ function App() {
   // Keybinding display
   const [keybinding, setKeybinding] = useState<string | null>(null);
 
+  // Toast notification state
+  const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
+  const toastTimeoutRef = useRef<number | null>(null);
+
+  const showToast = useCallback((message: string, type: 'error' | 'info' = 'error') => {
+    if (toastTimeoutRef.current) {
+      clearTimeout(toastTimeoutRef.current);
+    }
+    setToast({ message, type });
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToast(null);
+    }, 5000);
+  }, []);
+
   // Note: Hyperwhisper server settings are managed by useTrialKey hook
 
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -421,7 +435,7 @@ function App() {
     } else if (provider === "hyperwhisper") {
       // When using Hyperwhisper server, check trial key status (unless user has their own key)
       if (trialState.status === "loading" || isTrialInitializing) {
-        alert("Please wait, initializing...");
+        showToast("Please wait, initializing...", "info");
         return;
       }
 
@@ -429,34 +443,34 @@ function App() {
         // Check if user has an API key despite the error
         const currentHyperwhisperKey = localStorage.getItem("hyperwhisper_api_key") || "";
         if (!currentHyperwhisperKey.trim()) {
-          alert(`Connection error: ${trialState.error}`);
+          showToast(`Connection error: ${trialState.error}`);
           return;
         }
         // User has their own key, allow recording
       } else if (trialState.status === "quota_exceeded") {
         const upgradeUrl = trialState.info.upgrade_url || "https://hyperwhisper.dev/signup";
-        alert(`Trial quota exceeded. Please upgrade at: ${upgradeUrl}`);
+        showToast(`Trial quota exceeded. Please upgrade at: ${upgradeUrl}`);
         return;
       } else if (trialState.status === "expired") {
         const upgradeUrl = trialState.info.upgrade_url || "https://hyperwhisper.dev/signup";
-        alert(`Trial expired. Please upgrade at: ${upgradeUrl}`);
+        showToast(`Trial expired. Please upgrade at: ${upgradeUrl}`);
         return;
       } else if (trialState.status === "no_key") {
-        alert("No API key available. Please restart the app or enter an API key in settings.");
+        showToast("No API key available. Please restart the app or enter an API key in settings.");
         return;
       }
       // trialState.status is "active" or "has_api_key" - both are good to proceed
 
       const currentHyperwhisperKey = localStorage.getItem("hyperwhisper_api_key") || "";
       if (!currentHyperwhisperKey.trim()) {
-        alert("Please enter your Hyperwhisper API key first");
+        showToast("Please enter your Hyperwhisper API key first");
         return;
       }
     } else {
       // Deepgram
       const currentApiKey = localStorage.getItem("deepgram_api_key") || "";
       if (!currentApiKey.trim()) {
-        alert("Please enter your Deepgram API key first");
+        showToast("Please enter your Deepgram API key first");
         return;
       }
     }
@@ -472,7 +486,7 @@ function App() {
       await invoke("start_recording");
       setIsRecording(true);
     } catch (err) {
-      alert(`Could not start recording: ${err}`);
+      showToast(`Could not start recording: ${err}`);
     }
   };
 
@@ -488,7 +502,7 @@ function App() {
         refreshTrial();
       }
     } catch (err) {
-      alert(`Could not stop recording: ${err}`);
+      showToast(`Could not stop recording: ${err}`);
       setIsRecording(false);
     }
   };
@@ -512,6 +526,37 @@ function App() {
       className="flex flex-col h-screen w-screen relative bg-neutral-800/80 backdrop-blur-2xl rounded-2xl shadow-xl overflow-hidden"
       onMouseDown={handleDrag}
     >
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className={`absolute top-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-sm z-50 flex items-center gap-2 shadow-lg ${
+            toast.type === 'error' ? 'bg-red-500/90 text-white' : 'bg-neutral-600/90 text-white'
+          }`}
+        >
+          {toast.type === 'error' && (
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="12" y1="8" x2="12" y2="12"/>
+              <line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+          )}
+          <span>{toast.message}</span>
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              setToast(null);
+            }}
+            className="ml-2 text-white/60 hover:text-white"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      )}
+
       {/* Waveform area */}
       <div className="flex-1 flex items-center justify-center px-8 relative">
         {connectionError ? (
