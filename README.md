@@ -44,27 +44,63 @@ nix build
 ### Requirements
 
 - Linux with PipeWire/PulseAudio for audio capture
-- For auto-type feature: `ydotool`, `wtype` (Wayland), or `xdotool` (X11)
+- For auto-type feature: `ydotool` (Wayland) or `xdotool` (X11)
 
-- For Arch-based systems:
+- Common steps for all Linux distributions
 
-  ```sh
-  pacman -S gst-plugins-base gst-plugins-good gst-plugins-bad
-  ```
+  - make sure `/dev/uinput` is owned by `root` user and `input` group
+
+    ```sh
+    sudo tee /etc/udev/rules.d/99-uinput.rules << 'EOF'
+    KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
+    EOF
+    sudo udevadm trigger --name-match=uinput
+    ```
+
+  - create a `ydotoold` user service and enable it
+
+    ```sh
+    mkdir -p ~/.config/systemd/user/
+    cat > ~/.config/systemd/user/ydotoold.service << 'EOF'
+    [Unit]
+    Description=ydotoold daemon
+
+    [Service]
+    ExecStart=/usr/bin/ydotoold
+    Restart=always
+
+    [Install]
+    WantedBy=default.target
+    EOF
+
+    # Enable and start the service
+    systemctl --user enable --now ydotoold.service
+    ```
+
+  - add your user to the input group
+
+    ```sh
+    sudo usermod -aG input $USER
+    ```
 
 - For Ubuntu/Debian:
 
   ```sh
-  sudo apt install gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad
+  sudo apt install -y ydotool
+  sudo dpkg -i hyperwhisper_0.1.0_amd64.deb
   ```
 
 - For Fedora:
 
   ```sh
-  # dnf install ydotool
-  # ydotool
-  # user needs to be in input group
-  sudo dnf install gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free
+  sudo dnf install ydotool
+  sudo dnf install hyperwhisper-0.1.0-1.x86_64.rpm
+  ```
+
+- For NixOS:
+
+  ```sh
+  nix build
   ```
 
 ## Usage
@@ -105,50 +141,9 @@ Bind this command to a keyboard shortcut in your desktop environment for hands-f
 - [Bun](https://bun.sh/) or Node.js
 - Linux development libraries for Tauri
 
-On Ubuntu/Debian:
-
-```sh
-sudo dpkg -i hyperwhisper_0.1.0_amd64.deb
-
-sudo apt install -y ydotool
-
-sudo tee /etc/udev/rules.d/99-uinput.rules << 'EOF'
-KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
-EOF
-sudo udevadm trigger --name-match=uinput
-
-mkdir -p ~/.config/systemd/user/
-cat > ~/.config/systemd/user/ydotoold.service << 'EOF'
-[Unit]
-Description=ydotoold daemon
-
-[Service]
-ExecStart=/usr/bin/ydotoold
-Restart=always
-
-[Install]
-WantedBy=default.target
-EOF
-
-# Enable and start the service
-systemctl --user enable --now ydotoold.service
-
-# add your user to the input group
-sudo usermod -aG input $USER
-```
-
-This will take effect after you logout and login into the session / restart.
-If you want to immediately test it out, you can execute `newgrp input` and invoke `hyperwhisper` from the same shell.
-
-
-```sh
-newgrp input
-hyperwhisper
-```
-
 ### Setup
 
-```bash
+```sh
 # Clone the repository
 git clone https://github.com/hyperwhisper/app.git
 cd app
@@ -162,13 +157,13 @@ bun tauri dev
 
 ### Logo
 
-```
+```sh
 bun tauri icon logo.png
 ```
 
 ### Build
 
-```bash
+```sh
 # Production build
 bun tauri build
 ```
