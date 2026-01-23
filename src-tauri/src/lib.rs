@@ -1100,21 +1100,22 @@ fn type_text_internal(text: &str) -> Result<(), String> {
 
     #[cfg(target_os = "macos")]
     {
-        // Use cliclick on macOS (https://github.com/BlueM/cliclick)
-        // The t: action types text into the frontmost application
-        // Text with spaces must be quoted
-        let type_arg = format!("t:{}", text);
-        let cliclick_result = std::process::Command::new("cliclick")
-            .arg(&type_arg)
+        // Use osascript with AppleScript on macOS
+        // Escape backslashes and double quotes for AppleScript string
+        let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!("tell application \"System Events\" to keystroke \"{}\"", escaped);
+
+        let osascript_result = std::process::Command::new("osascript")
+            .args(["-e", &script])
             .status();
 
-        if let Ok(status) = cliclick_result {
+        if let Ok(status) = osascript_result {
             if status.success() {
                 return Ok(());
             }
         }
 
-        return Err("Failed to type text: cliclick failed. Install with 'brew install cliclick'".to_string());
+        return Err("Failed to type text: osascript failed. Ensure accessibility permissions are granted.".to_string());
     }
 
     #[cfg(not(target_os = "macos"))]
