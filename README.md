@@ -46,7 +46,7 @@ nix build
 - Linux with PipeWire/PulseAudio for audio capture
 - For auto-type feature: `ydotool` (Wayland) or `xdotool` (X11)
 
-- Common steps for all Linux distributions
+- Steps to enable auto-type on Linux distributions
 
   - make sure `/dev/uinput` is owned by `root` user and `input` group
 
@@ -100,6 +100,26 @@ nix build
 
   ```sh
   nix build
+  ```
+
+- Steps to enable auto-type on MacOS
+
+  - Goto `Settings` -> `Privacy & Security` -> `Accessibility`
+  - Add `hyperwhisper` here and enable it
+
+- For MacOS:
+  - you'll need rust and bun
+    ```sh
+    brew tap oven-sh/bun
+    brew install bun
+
+    brew install rust
+    ```
+
+  ```sh
+  git clone https://github.com/hyperwhisper/app.git
+  cd app
+  bun tauri build
   ```
 
 ## Usage
