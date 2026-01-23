@@ -1098,41 +1098,63 @@ fn type_text_internal(text: &str) -> Result<(), String> {
         return Ok(());
     }
 
-    // Try ydotool first (works on both Wayland and X11 via uinput)
-    // Use --key-delay 0 for fastest typing
-    let ydotool_result = std::process::Command::new("ydotool")
-        .args(["type", "--key-delay=0", "--", text])
-        .status();
+    #[cfg(target_os = "macos")]
+    {
+        // Use cliclick on macOS (https://github.com/BlueM/cliclick)
+        // The t: action types text into the frontmost application
+        // Text with spaces must be quoted
+        let type_arg = format!("t:{}", text);
+        let cliclick_result = std::process::Command::new("cliclick")
+            .arg(&type_arg)
+            .status();
 
-    if let Ok(status) = ydotool_result {
-        if status.success() {
-            return Ok(());
+        if let Ok(status) = cliclick_result {
+            if status.success() {
+                return Ok(());
+            }
         }
+
+        return Err("Failed to type text: cliclick failed. Install with 'brew install cliclick'".to_string());
     }
 
-    // Try wtype (Wayland - requires compositor support)
-    let wtype_result = std::process::Command::new("wtype")
-        .arg(text)
-        .status();
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Try ydotool first (works on both Wayland and X11 via uinput)
+        // Use --key-delay 0 for fastest typing
+        let ydotool_result = std::process::Command::new("ydotool")
+            .args(["type", "--key-delay=0", "--", text])
+            .status();
 
-    if let Ok(status) = wtype_result {
-        if status.success() {
-            return Ok(());
+        if let Ok(status) = ydotool_result {
+            if status.success() {
+                return Ok(());
+            }
         }
-    }
 
-    // Fall back to xdotool (X11)
-    let xdotool_result = std::process::Command::new("xdotool")
-        .args(["type", "--clearmodifiers", text])
-        .status();
+        // Try wtype (Wayland - requires compositor support)
+        let wtype_result = std::process::Command::new("wtype")
+            .arg(text)
+            .status();
 
-    if let Ok(status) = xdotool_result {
-        if status.success() {
-            return Ok(());
+        if let Ok(status) = wtype_result {
+            if status.success() {
+                return Ok(());
+            }
         }
-    }
 
-    Err("Failed to type text: ydotool, wtype, and xdotool all failed".to_string())
+        // Fall back to xdotool (X11)
+        let xdotool_result = std::process::Command::new("xdotool")
+            .args(["type", "--clearmodifiers", text])
+            .status();
+
+        if let Ok(status) = xdotool_result {
+            if status.success() {
+                return Ok(());
+            }
+        }
+
+        Err("Failed to type text: ydotool, wtype, and xdotool all failed".to_string())
+    }
 }
 
 #[tauri::command]
