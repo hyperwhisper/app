@@ -21,6 +21,7 @@ use tauri::{AppHandle, Emitter, State};
 use tungstenite::stream::MaybeTlsStream;
 use tungstenite::{Message, WebSocket};
 use url::Url;
+#[cfg(target_os = "linux")]
 use zbus::interface;
 
 // Application state for audio recording
@@ -50,11 +51,13 @@ pub struct AudioState {
     use_vad: Arc<Mutex<bool>>,
 }
 
-// D-Bus service for external control
+// D-Bus service for external control (Linux only)
+#[cfg(target_os = "linux")]
 struct HyperWhisperDBus {
     app_handle: AppHandle,
 }
 
+#[cfg(target_os = "linux")]
 #[interface(name = "dev.hyperwhisper")]
 impl HyperWhisperDBus {
     async fn toggle_recording(&self) -> bool {
@@ -1863,29 +1866,33 @@ pub fn run() {
             get_keybinding,
         ])
         .setup(|app| {
-            let handle = app.handle().clone();
+            // Spawn D-Bus service for external control (Linux only)
+            #[cfg(target_os = "linux")]
+            {
+                let handle = app.handle().clone();
 
-            // Spawn D-Bus service for external control
-            tauri::async_runtime::spawn(async move {
-                let service = HyperWhisperDBus { app_handle: handle };
+                tauri::async_runtime::spawn(async move {
+                    let service = HyperWhisperDBus { app_handle: handle };
 
-                match zbus::connection::Builder::session()
-                    .and_then(|b| b.name("dev.hyperwhisper"))
-                    .and_then(|b| b.serve_at("/dev/hyperwhisper", service))
-                {
-                    Ok(builder) => {
-                        match builder.build().await {
-                            Ok(_conn) => {
-                                // Keep connection alive
-                                std::future::pending::<()>().await;
+                    match zbus::connection::Builder::session()
+                        .and_then(|b| b.name("dev.hyperwhisper"))
+                        .and_then(|b| b.serve_at("/dev/hyperwhisper", service))
+                    {
+                        Ok(builder) => {
+                            match builder.build().await {
+                                Ok(_conn) => {
+                                    // Keep connection alive
+                                    std::future::pending::<()>().await;
+                                }
+                                Err(e) => eprintln!("Failed to build D-Bus connection: {}", e),
                             }
-                            Err(e) => eprintln!("Failed to build D-Bus connection: {}", e),
                         }
+                        Err(e) => eprintln!("Failed to setup D-Bus service: {}", e),
                     }
-                    Err(e) => eprintln!("Failed to setup D-Bus service: {}", e),
-                }
-            });
+                });
+            }
 
+            let _ = app; // Silence unused warning on non-Linux
             Ok(())
         })
         .run(tauri::generate_context!())
