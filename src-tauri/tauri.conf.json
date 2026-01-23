@@ -43,6 +43,12 @@
       "rpm": {
         "depends": ["ydotool"]
       }
+    },
+    "macOS": {
+      "minimumSystemVersion": "10.15",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "HyperWhisper needs microphone access to record and transcribe your speech."
+      }
     }
   }
 }
