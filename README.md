@@ -93,7 +93,6 @@ nix build
 - For Fedora:
 
   ```sh
-  sudo dnf install ydotool
   sudo dnf install hyperwhisper-0.1.0-1.x86_64.rpm
   ```
 

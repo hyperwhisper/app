@@ -36,6 +36,9 @@
       "icons/icon.ico"
     ],
     "linux": {
+      "deb": {
+        "depends": ["ydotool"]
+      },
       "rpm": {
         "depends": ["ydotool"]
       }
