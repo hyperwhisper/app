@@ -107,8 +107,43 @@ Bind this command to a keyboard shortcut in your desktop environment for hands-f
 
 On Ubuntu/Debian:
 
-```bash
-sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+```sh
+sudo dpkg -i hyperwhisper_0.1.0_amd64.deb
+
+sudo apt install -y ydotool
+
+sudo tee /etc/udev/rules.d/99-uinput.rules << 'EOF'
+KERNEL=="uinput", MODE="0660", GROUP="input", OPTIONS+="static_node=uinput"
+EOF
+sudo udevadm trigger --name-match=uinput
+
+mkdir -p ~/.config/systemd/user/
+cat > ~/.config/systemd/user/ydotoold.service << 'EOF'
+[Unit]
+Description=ydotoold daemon
+
+[Service]
+ExecStart=/usr/bin/ydotoold
+Restart=always
+
+[Install]
+WantedBy=default.target
+EOF
+
+# Enable and start the service
+systemctl --user enable --now ydotoold.service
+
+# add your user to the input group
+sudo usermod -aG input $USER
+```
+
+This will take effect after you logout and login into the session / restart.
+If you want to immediately test it out, you can execute `newgrp input` and invoke `hyperwhisper` from the same shell.
+
+
+```sh
+newgrp input
+hyperwhisper
 ```
 
 ### Setup
