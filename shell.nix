@@ -36,6 +36,7 @@ in pkgs.mkShell {
 
     # Audio libraries for cpal (works with PipeWire via ALSA emulation)
     alsa-lib
+    pipewire
     libxkbcommon
 
     # Vulkan SDK for whisper.cpp/ggml (optional GPU acceleration)
@@ -60,7 +61,10 @@ in pkgs.mkShell {
   ];
 
   # Set ALSA library path for cpal
-  LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [pkgs.alsa-lib]}";
+  LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath [pkgs.alsa-lib pkgs.pipewire]}";
+
+  # Point ALSA to PipeWire's PCM plugin so audio works on PipeWire systems
+  ALSA_PLUGIN_DIR = "${pkgs.pipewire}/lib/alsa-lib";
 
   # Set LIBCLANG_PATH for whisper-rs bindgen
   LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
