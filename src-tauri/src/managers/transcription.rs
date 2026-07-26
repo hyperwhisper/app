@@ -17,7 +17,7 @@ enum LoadedEngine {
 impl LoadedEngine {
     /// Transcribe audio samples (expects 16kHz mono f32 audio)
     /// Writes to a temp WAV file and uses transcribe_file API
-    fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
+    fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
         // Create temp WAV file
         let temp_dir = std::env::temp_dir();
         let temp_path = temp_dir.join(format!("hyperwhisper_temp_{}.wav", std::process::id()));
@@ -29,8 +29,12 @@ impl LoadedEngine {
         // Transcribe using the engine
         let result = match self {
             LoadedEngine::Whisper(engine) => {
+                let params = transcribe_rs::engines::whisper::WhisperInferenceParams {
+                    language,
+                    ..Default::default()
+                };
                 engine
-                    .transcribe_file(&temp_path, None)
+                    .transcribe_file(&temp_path, Some(params))
                     .map_err(|e| format!("Whisper transcription error: {}", e))
             }
             LoadedEngine::Parakeet(engine) => {
@@ -192,14 +196,14 @@ impl TranscriptionManager {
         self.loaded_engine = None;
     }
 
-    /// Transcribe audio samples (expects 16kHz mono f32 audio)
-    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
+    /// Transcribe 16kHz mono f32 audio. `language` None = auto-detect.
+    pub fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
         let engine = self
             .loaded_engine
             .as_mut()
             .ok_or("No model loaded")?;
 
-        engine.transcribe(samples)
+        engine.transcribe(samples, language)
     }
 
 }

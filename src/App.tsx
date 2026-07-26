@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { useTrialKey } from "@/hooks/use-trial-key";
 
@@ -320,7 +321,7 @@ function App() {
   // Store handleRecord in a ref so the D-Bus listener always has the latest version
   const handleRecordRef = useRef<() => void>(() => {});
 
-  // Listen for D-Bus toggle events (from global keyboard shortcut)
+  // Toggle recording from the global shortcut event.
   useEffect(() => {
     const unlisten = listen("recording-toggled", () => {
       handleRecordRef.current();
@@ -330,6 +331,21 @@ function App() {
       unlisten.then((fn) => fn());
     };
   }, []);
+
+  // Show the spectrogram indicator window while recording or processing.
+  useEffect(() => {
+    const shouldShow = isRecording || isProcessing;
+    (async () => {
+      await emit("indicator-active", shouldShow);
+      const indicator = await WebviewWindow.getByLabel("indicator");
+      if (!indicator) return;
+      if (shouldShow) {
+        await indicator.show();
+      } else {
+        await indicator.hide();
+      }
+    })().catch(() => {});
+  }, [isRecording, isProcessing]);
 
   // Real-time waveform visualization during recording
   const startRealTimeWaveform = useCallback(async () => {
@@ -427,14 +443,9 @@ function App() {
     }
   }, []);
 
-  // Start/stop real-time waveform when recording state changes
+  // The hidden main window does not open its own mic; the indicator window
+  // handles the visualization (a second mic stream garbled the recording).
   useEffect(() => {
-    if (isRecording) {
-      startRealTimeWaveform();
-    } else {
-      stopRealTimeWaveform();
-    }
-
     return () => {
       stopRealTimeWaveform();
     };

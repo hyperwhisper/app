@@ -19,6 +19,7 @@
         "height": 180,
         "decorations": false,
         "transparent": true,
+        "visible": false,
         "backgroundColor": [0, 0, 0, 0]
       }
     ],

@@ -49,6 +49,10 @@ pub struct AudioState {
     transcription_manager: SharedTranscriptionManager,
     // VAD enabled flag
     use_vad: Arc<Mutex<bool>>,
+    // forced language for local Whisper (None = auto-detect)
+    transcription_language: Arc<Mutex<Option<String>>>,
+    // app to restore focus to before auto-typing
+    frontmost_app: Arc<Mutex<Option<String>>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -1096,6 +1100,38 @@ fn set_hyperwhisper_server_settings(
     }
 }
 
+/// Get the name of the app that is currently frontmost (macOS only).
+#[cfg(target_os = "macos")]
+fn capture_frontmost_app() -> Option<String> {
+    let out = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to get name of first application process whose frontmost is true",
+        ])
+        .output()
+        .ok()?;
+    if out.status.success() {
+        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !name.is_empty() && name != "hyperwhisper" {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Bring a named app back to the front (macOS only), so typed text lands there.
+#[cfg(target_os = "macos")]
+fn restore_frontmost_app(name: &str) {
+    let safe = name.replace('"', "");
+    let script = format!(
+        "tell application \"System Events\" to set frontmost of process \"{}\" to true",
+        safe
+    );
+    let _ = std::process::Command::new("osascript")
+        .args(["-e", &script])
+        .status();
+}
+
 fn type_text_internal(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
@@ -1174,6 +1210,12 @@ async fn start_recording(
         }
     }
 
+    // remember the active app so we can type back into it
+    #[cfg(target_os = "macos")]
+    {
+        *state.frontmost_app.lock().unwrap() = capture_frontmost_app();
+    }
+
     // Check if using local transcription
     let use_local = *state.use_local_transcription.lock().unwrap();
 
@@ -1213,6 +1255,9 @@ async fn start_recording(
 
     // Get VAD setting
     let use_vad = *state.use_vad.lock().unwrap();
+
+    let transcription_language = state.transcription_language.lock().unwrap().clone();
+    let restore_target = state.frontmost_app.lock().unwrap().clone();
 
     // Clone transcription manager for the thread
     let transcription_manager = state.transcription_manager.0.clone();
@@ -1372,7 +1417,7 @@ async fn start_recording(
             if !all_audio.is_empty() {
                 let result = {
                     let mut manager = transcription_manager.lock().unwrap();
-                    manager.transcribe(&all_audio)
+                    manager.transcribe(&all_audio, transcription_language.clone())
                 };
 
                 match result {
@@ -1380,6 +1425,11 @@ async fn start_recording(
                         let text = text.trim().to_string();
                         if !text.is_empty() {
                             if auto_type {
+                                #[cfg(target_os = "macos")]
+                                if let Some(ref target) = restore_target {
+                                    restore_frontmost_app(target);
+                                    std::thread::sleep(Duration::from_millis(60));
+                                }
                                 let _ = type_text_internal(&format!("{} ", text));
                             }
                             let event = TranscriptionEvent {
@@ -1824,11 +1874,24 @@ pub fn run() {
         active_local_model_id: Arc::new(Mutex::new(None)),
         model_manager,
         transcription_manager,
-        use_vad: Arc::new(Mutex::new(true)), // VAD enabled by default
+        use_vad: Arc::new(Mutex::new(false)),
+        transcription_language: Arc::new(Mutex::new(None)),
+        frontmost_app: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        // Global shortcut toggles recording from anywhere.
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    use tauri_plugin_global_shortcut::ShortcutState;
+                    if event.state() == ShortcutState::Pressed {
+                        let _ = app.emit("recording-toggled", ());
+                    }
+                })
+                .build(),
+        )
         .manage(audio_state)
         .invoke_handler(tauri::generate_handler![
             start_recording,
@@ -1866,6 +1929,145 @@ pub fn run() {
             get_keybinding,
         ])
         .setup(|app| {
+            // F3 toggles recording from anywhere.
+            #[cfg(desktop)]
+            {
+                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
+                if let Err(e) = app.global_shortcut().register(Shortcut::new(None, Code::F3)) {
+                    eprintln!("Failed to register F3 shortcut: {}", e);
+                }
+            }
+
+            // Menu-bar tray: open/hide window, pick language, quit.
+            #[cfg(desktop)]
+            {
+                use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
+                use tauri::tray::TrayIconBuilder;
+                use tauri::Manager;
+
+                let open_item =
+                    MenuItem::with_id(app, "open_settings", "Open hyperwhisper", true, None::<&str>)?;
+                let hide_item =
+                    MenuItem::with_id(app, "hide_window", "Hide window", true, None::<&str>)?;
+
+                // Language submenu (affects local Whisper transcription only).
+                let lang_auto =
+                    CheckMenuItem::with_id(app, "lang_auto", "Auto-detect", true, true, None::<&str>)?;
+                let lang_en =
+                    CheckMenuItem::with_id(app, "lang_en", "English", true, false, None::<&str>)?;
+                let lang_bg =
+                    CheckMenuItem::with_id(app, "lang_bg", "Bulgarian", true, false, None::<&str>)?;
+                let lang_menu =
+                    Submenu::with_items(app, "Language", true, &[&lang_auto, &lang_en, &lang_bg])?;
+
+                let quit_item =
+                    MenuItem::with_id(app, "quit", "Quit hyperwhisper", true, None::<&str>)?;
+                let sep = PredefinedMenuItem::separator(app)?;
+                let menu = Menu::with_items(
+                    app,
+                    &[&open_item, &hide_item, &lang_menu, &sep, &quit_item],
+                )?;
+
+                let (la, le, lb) = (lang_auto.clone(), lang_en.clone(), lang_bg.clone());
+
+                let mut tray = TrayIconBuilder::new()
+                    .menu(&menu)
+                    .tooltip("hyperwhisper — press F3 to dictate")
+                    .on_menu_event(move |app, event| match event.id.as_ref() {
+                        "open_settings" => {
+                            // regular app so the window is focusable
+                            #[cfg(target_os = "macos")]
+                            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            }
+                        }
+                        "hide_window" => {
+                            if let Some(w) = app.get_webview_window("main") {
+                                let _ = w.hide();
+                            }
+                            #[cfg(target_os = "macos")]
+                            let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                        }
+                        "lang_auto" => {
+                            *app.state::<AudioState>().transcription_language.lock().unwrap() = None;
+                            let _ = la.set_checked(true);
+                            let _ = le.set_checked(false);
+                            let _ = lb.set_checked(false);
+                        }
+                        "lang_en" => {
+                            *app.state::<AudioState>().transcription_language.lock().unwrap() =
+                                Some("en".to_string());
+                            let _ = la.set_checked(false);
+                            let _ = le.set_checked(true);
+                            let _ = lb.set_checked(false);
+                        }
+                        "lang_bg" => {
+                            *app.state::<AudioState>().transcription_language.lock().unwrap() =
+                                Some("bg".to_string());
+                            let _ = la.set_checked(false);
+                            let _ = le.set_checked(false);
+                            let _ = lb.set_checked(true);
+                        }
+                        "quit" => app.exit(0),
+                        _ => {}
+                    });
+
+                // template icon renders white on the macOS menu bar
+                if let Ok(icon) =
+                    tauri::image::Image::from_bytes(include_bytes!("../icons/tray-icon.png"))
+                {
+                    tray = tray.icon(icon).icon_as_template(true);
+                } else if let Some(icon) = app.default_window_icon().cloned() {
+                    tray = tray.icon(icon).icon_as_template(true);
+                }
+                let _ = tray.build(app)?;
+            }
+
+            // Start as a background menu-bar agent (no Dock icon, no Cmd-Tab).
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
+            // Hidden indicator window (the recording waterfall spectrogram).
+            #[cfg(desktop)]
+            {
+                use tauri::{WebviewUrl, WebviewWindowBuilder};
+
+                let ind_w = 460.0;
+                let ind_h = 200.0;
+                match WebviewWindowBuilder::new(
+                    app,
+                    "indicator",
+                    WebviewUrl::App("indicator".into()),
+                )
+                .title("hyperwhisper indicator")
+                .inner_size(ind_w, ind_h)
+                .decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .skip_taskbar(true)
+                .focused(false)
+                .resizable(false)
+                .shadow(false)
+                .visible(false)
+                .build()
+                {
+                    Ok(win) => {
+                        // bottom-center of the primary screen
+                        if let Ok(Some(monitor)) = win.primary_monitor() {
+                            let scale = monitor.scale_factor();
+                            let sw = monitor.size().width as f64 / scale;
+                            let sh = monitor.size().height as f64 / scale;
+                            let x = (sw - ind_w) / 2.0;
+                            let y = sh - ind_h - 90.0;
+                            let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+                        }
+                    }
+                    Err(e) => eprintln!("Failed to create indicator window: {}", e),
+                }
+            }
+
             // Spawn D-Bus service for external control (Linux only)
             #[cfg(target_os = "linux")]
             {
