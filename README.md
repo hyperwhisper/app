@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="logo.png" alt="HyperWhisper Logo" width="128" height="128">
+  <img src="logo.png" alt="Omegawhisper Logo" width="128" height="128">
 </p>
 
-<h1 align="center">HyperWhisper</h1>
+<h1 align="center">Omegawhisper</h1>
 
 <p align="center">
   A cross-platform desktop speech-to-text application with real-time transcription
@@ -12,7 +12,7 @@
 
 ## About
 
-HyperWhisper is a lightweight desktop application that provides real-time audio transcription using the Deepgram API. Record your voice, get instant transcriptions, and optionally auto-type the text directly into any application.
+Omegawhisper is a lightweight desktop application that provides real-time audio transcription using the Deepgram API. Record your voice, get instant transcriptions, and optionally auto-type the text directly into any application.
 
 ### Features
 
@@ -23,13 +23,13 @@ HyperWhisper is a lightweight desktop application that provides real-time audio 
 - Support for multiple audio input devices
 - Dark theme UI
 - Global keyboard shortcut support via D-Bus
-- Works with HyperWhisper server or with Deepgram APIs
+- Works with the Hyperwhisper hosted server or with Deepgram APIs
 
 ## Installation
 
 ### Download
 
-Download the latest release for your platform from the [Releases](https://github.com/hyperwhisper/app/releases) page.
+Download the latest release for your platform from the [Releases](https://github.com/webtemp/omegawhisper/releases) page.
 
 **Linux:**
 
@@ -87,13 +87,13 @@ nix build
 
   ```sh
   sudo apt install -y ydotool
-  sudo dpkg -i hyperwhisper_0.1.0_amd64.deb
+  sudo dpkg -i omegawhisper_0.1.0_amd64.deb
   ```
 
 - For Fedora:
 
   ```sh
-  sudo dnf install hyperwhisper-0.1.0-1.x86_64.rpm
+  sudo dnf install omegawhisper-0.1.0-1.x86_64.rpm
   ```
 
 - For NixOS:
@@ -105,7 +105,7 @@ nix build
 - Steps to enable auto-type on MacOS
 
   - Goto `Settings` -> `Privacy & Security` -> `Accessibility`
-  - Add `hyperwhisper` here and enable it
+  - Add `Omegawhisper` here and enable it
 
 - For MacOS:
   - you'll need rust and bun
@@ -117,14 +117,14 @@ nix build
     ```
 
   ```sh
-  git clone https://github.com/hyperwhisper/app.git
-  cd app
+  git clone https://github.com/webtemp/omegawhisper.git
+  cd omegawhisper
   bun tauri build
   ```
 
 ## Usage
 
-1. Launch HyperWhisper
+1. Launch Omegawhisper
 2. Open Settings and configure your transcription service:
    - **Hyperwhisper**: Use the hosted service
    - **Deepgram**: Use your own Deepgram API key
@@ -138,16 +138,16 @@ nix build
 You can trigger recording from anywhere using:
 
 ```bash
-hyperwhisper transcribe toggle
+omegawhisper transcribe toggle
 ```
 
 or via D-Bus
 
 ```sh
 dbus-send --session --type=method_call \
-  --dest=dev.hyperwhisper \
-  /dev/hyperwhisper \
-  dev.hyperwhisper.toggle_recording
+  --dest=dev.omegawhisper \
+  /dev/omegawhisper \
+  dev.omegawhisper.toggle_recording
 ```
 
 Bind this command to a keyboard shortcut in your desktop environment for hands-free operation.
@@ -164,8 +164,8 @@ Bind this command to a keyboard shortcut in your desktop environment for hands-f
 
 ```sh
 # Clone the repository
-git clone https://github.com/hyperwhisper/app.git
-cd app
+git clone https://github.com/webtemp/omegawhisper.git
+cd omegawhisper
 
 # Install dependencies
 bun install
@@ -216,6 +216,5 @@ app/
 - Copyright (C) 2026 Ameya Shenoy &lt;shenoy.ameya@gmail.com&gt;
 - Copyright (C) 2026 Deyan Danailov &lt;webtemp@gmail.com&gt;
 
-This is a modified fork of [hyperwhisper](https://github.com/hyperwhisper/app).
-Modifications by Deyan Danailov, from July 2026 onward, including macOS
-background dictation.
+This is a modified fork of [hyperwhisper](https://github.com/hyperwhisper/app) ! 
+Modifications by Deyan Danailov, mainly macOS improvements.

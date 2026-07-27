@@ -55,13 +55,13 @@ pub struct AudioState {
 
 // D-Bus service for external control (Linux only)
 #[cfg(target_os = "linux")]
-struct HyperWhisperDBus {
+struct OmegawhisperDBus {
     app_handle: AppHandle,
 }
 
 #[cfg(target_os = "linux")]
-#[interface(name = "dev.hyperwhisper")]
-impl HyperWhisperDBus {
+#[interface(name = "dev.omegawhisper")]
+impl OmegawhisperDBus {
     async fn toggle_recording(&self) -> bool {
         // Emit event to frontend to toggle recording
         let _ = self.app_handle.emit("recording-toggled", ());
@@ -282,7 +282,7 @@ fn get_device_fingerprint() -> String {
 fn get_recordings_dir() -> Result<PathBuf, String> {
     let data_dir = dirs::data_local_dir()
         .ok_or_else(|| "Could not find local data directory".to_string())?;
-    let recordings_dir = data_dir.join("hyperwhisper").join("recordings");
+    let recordings_dir = data_dir.join("omegawhisper").join("recordings");
 
     if !recordings_dir.exists() {
         fs::create_dir_all(&recordings_dir)
@@ -290,6 +290,50 @@ fn get_recordings_dir() -> Result<PathBuf, String> {
     }
 
     Ok(recordings_dir)
+}
+
+// The data folder was called "hyperwhisper" before the app was renamed to
+// Omegawhisper. Move it to the new name once, so the downloaded models
+// (several GB) and old recordings are kept instead of downloaded again.
+// Must run before anything else touches the data folder.
+fn migrate_legacy_data_dir() {
+    let data_dir = match dirs::data_local_dir() {
+        Some(d) => d,
+        None => return,
+    };
+    let old_dir = data_dir.join("hyperwhisper");
+    let new_dir = data_dir.join("omegawhisper");
+
+    if !old_dir.is_dir() {
+        return;
+    }
+
+    if let Ok(mut entries) = fs::read_dir(&new_dir) {
+        if entries.next().is_some() {
+            // Both folders hold data - do not touch either one.
+            eprintln!(
+                "Data folder migration skipped: {} already has files. Old data is still in {}",
+                new_dir.display(),
+                old_dir.display()
+            );
+            return;
+        }
+        // New folder exists but is empty: remove it so the rename can use the name.
+        if let Err(e) = fs::remove_dir(&new_dir) {
+            eprintln!("Could not remove empty {}: {}", new_dir.display(), e);
+            return;
+        }
+    }
+
+    match fs::rename(&old_dir, &new_dir) {
+        Ok(()) => eprintln!("Moved {} to {}", old_dir.display(), new_dir.display()),
+        Err(e) => eprintln!(
+            "Failed to move {} to {}: {}",
+            old_dir.display(),
+            new_dir.display(),
+            e
+        ),
+    }
 }
 
 #[tauri::command]
@@ -1723,7 +1767,7 @@ fn type_text(text: String) -> Result<(), String> {
     type_text_internal(&text)
 }
 
-/// Query dconf for the keybinding associated with hyperwhisper
+/// Query dconf for the keybinding associated with omegawhisper
 /// Returns the keybinding string (e.g., "<Super>m") or None if not found
 #[tauri::command]
 fn get_keybinding() -> Option<String> {
@@ -1741,15 +1785,19 @@ fn get_keybinding() -> Option<String> {
 
     let dump = String::from_utf8_lossy(&output.stdout);
 
-    // Search patterns for hyperwhisper keybindings
+    // Search patterns for omegawhisper keybindings.
+    // The old hyperwhisper names stay so a keybinding made before the
+    // rename is still found.
     let search_patterns = [
+        "omegawhisper",
         "hyperwhisper",
         "ToggleRecording",
+        "dev.omegawhisper",
         "dev.hyperwhisper",
     ];
 
     // Parse dconf dump format - it's INI-like with [path] sections
-    // First, split into sections and find the one containing hyperwhisper
+    // First, split into sections and find the one containing omegawhisper
     let mut sections: Vec<(String, Vec<&str>)> = Vec::new();
     let mut current_section = String::new();
     let mut current_lines: Vec<&str> = Vec::new();
@@ -1772,7 +1820,7 @@ fn get_keybinding() -> Option<String> {
         sections.push((current_section, current_lines));
     }
 
-    // Find sections that contain hyperwhisper in any line
+    // Find sections that contain omegawhisper in any line
     for (section_name, lines) in &sections {
         let section_text = lines.join("\n");
         let has_pattern = search_patterns.iter().any(|p|
@@ -1803,6 +1851,9 @@ fn get_keybinding() -> Option<String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Rename the old data folder before any code reads or creates it.
+    migrate_legacy_data_dir();
+
     // Initialize model manager
     let model_manager = Arc::new(
         ModelManager::new().expect("Failed to initialize model manager")
@@ -1899,7 +1950,7 @@ pub fn run() {
                 use tauri::Manager;
 
                 let open_item =
-                    MenuItem::with_id(app, "open_settings", "Open hyperwhisper", true, None::<&str>)?;
+                    MenuItem::with_id(app, "open_settings", "Open Omegawhisper", true, None::<&str>)?;
                 let settings_item =
                     MenuItem::with_id(app, "open_settings_window", "Settings...", true, None::<&str>)?;
                 let hide_item =
@@ -1916,7 +1967,7 @@ pub fn run() {
                     Submenu::with_items(app, "Language", true, &[&lang_auto, &lang_en, &lang_bg])?;
 
                 let quit_item =
-                    MenuItem::with_id(app, "quit", "Quit hyperwhisper", true, None::<&str>)?;
+                    MenuItem::with_id(app, "quit", "Quit Omegawhisper", true, None::<&str>)?;
                 let sep = PredefinedMenuItem::separator(app)?;
                 let menu = Menu::with_items(
                     app,
@@ -1927,7 +1978,7 @@ pub fn run() {
 
                 let mut tray = TrayIconBuilder::new()
                     .menu(&menu)
-                    .tooltip("hyperwhisper — press F3 to dictate")
+                    .tooltip("Omegawhisper — press F3 to dictate")
                     .on_menu_event(move |app, event| match event.id.as_ref() {
                         "open_settings" => {
                             // regular app so the window is focusable
@@ -2045,7 +2096,7 @@ pub fn run() {
                     "indicator",
                     WebviewUrl::App("indicator".into()),
                 )
-                .title("hyperwhisper indicator")
+                .title("Omegawhisper indicator")
                 .inner_size(ind_w, ind_h)
                 .decorations(false)
                 .transparent(true)
@@ -2078,11 +2129,11 @@ pub fn run() {
                 let handle = app.handle().clone();
 
                 tauri::async_runtime::spawn(async move {
-                    let service = HyperWhisperDBus { app_handle: handle };
+                    let service = OmegawhisperDBus { app_handle: handle };
 
                     match zbus::connection::Builder::session()
-                        .and_then(|b| b.name("dev.hyperwhisper"))
-                        .and_then(|b| b.serve_at("/dev/hyperwhisper", service))
+                        .and_then(|b| b.name("dev.omegawhisper"))
+                        .and_then(|b| b.serve_at("/dev/omegawhisper", service))
                     {
                         Ok(builder) => {
                             match builder.build().await {

@@ -3,9 +3,9 @@
 
 use clap::{Parser, Subcommand};
 
-/// HyperWhisper - The most productive speech to text app for Linux
+/// Omegawhisper - The most productive speech to text app for Linux
 #[derive(Parser, Debug)]
-#[command(name = "hyperwhisper")]
+#[command(name = "omegawhisper")]
 #[command(author, version, about, long_about = None)]
 struct Args {
     #[command(subcommand)]
@@ -23,7 +23,7 @@ enum Commands {
 
 #[derive(Subcommand, Debug)]
 enum TranscribeAction {
-    /// Toggle transcription on/off (requires running HyperWhisper instance)
+    /// Toggle transcription on/off (requires running Omegawhisper instance)
     Toggle,
 }
 
@@ -42,7 +42,7 @@ fn main() {
         },
         None => {
             // Run the Tauri application
-            hyperwhisper_lib::run()
+            omegawhisper_lib::run()
         }
     }
 }
@@ -54,9 +54,9 @@ fn toggle_recording() -> Result<(), Box<dyn std::error::Error>> {
 
     let proxy = zbus::blocking::Proxy::new(
         &connection,
-        "dev.hyperwhisper",
-        "/dev/hyperwhisper",
-        "dev.hyperwhisper",
+        "dev.omegawhisper",
+        "/dev/omegawhisper",
+        "dev.omegawhisper",
     )?;
 
     let _result: bool = proxy.call("ToggleRecording", &())?;

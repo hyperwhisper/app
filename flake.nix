@@ -1,5 +1,5 @@
 {
-  description = "HyperWhisper - Type 3x faster, without lifting a finger";
+  description = "Omegawhisper - Type 3x faster, without lifting a finger";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -71,7 +71,7 @@
 
         # Fetch node_modules as a fixed-output derivation
         nodeModules = pkgs.stdenv.mkDerivation {
-          pname = "hyperwhisper-node-modules";
+          pname = "omegawhisper-node-modules";
           version = "0.1.0";
 
           src = pkgs.lib.cleanSourceWith {
@@ -107,7 +107,7 @@
 
         # Build the frontend
         frontend = pkgs.stdenv.mkDerivation {
-          pname = "hyperwhisper-frontend";
+          pname = "omegawhisper-frontend";
           version = "0.1.0";
 
           src = pkgs.lib.cleanSourceWith {
@@ -154,7 +154,7 @@
       in
       {
         packages.default = pkgs.stdenv.mkDerivation {
-          pname = "hyperwhisper";
+          pname = "omegawhisper";
           version = "0.1.0";
 
           src = pkgs.lib.cleanSource ./.;
@@ -225,9 +225,9 @@
             runHook preInstall
 
             mkdir -p $out/bin
-            cp src-tauri/target/release/hyperwhisper $out/bin/
+            cp src-tauri/target/release/omegawhisper $out/bin/
 
-            wrapProgram $out/bin/hyperwhisper \
+            wrapProgram $out/bin/omegawhisper \
               --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath runtimeDeps}" \
               --prefix PATH : "${pkgs.lib.makeBinPath [ pkgs.wtype pkgs.ydotool ]}"
 
@@ -236,11 +236,11 @@
 
           meta = with pkgs.lib; {
             description = "Type 3x faster, without lifting a finger";
-            homepage = "https://github.com/hyperwhisper/app";
+            homepage = "https://github.com/webtemp/omegawhisper";
             license = licenses.gpl3Plus;
             maintainers = [ ];
             platforms = platforms.linux;
-            mainProgram = "hyperwhisper";
+            mainProgram = "omegawhisper";
           };
         };
 
@@ -264,7 +264,7 @@
           LIBCLANG_PATH = "${pkgs.llvmPackages.libclang.lib}/lib";
 
           shellHook = ''
-            echo "HyperWhisper development environment"
+            echo "Omegawhisper development environment"
             echo "Run 'bun run tauri dev' to start development"
           '';
         };

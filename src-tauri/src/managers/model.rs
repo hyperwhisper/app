@@ -242,7 +242,7 @@ impl ModelManager {
     pub fn new() -> Result<Self, String> {
         let data_dir = dirs::data_local_dir()
             .ok_or_else(|| "Could not find local data directory".to_string())?;
-        let models_dir = data_dir.join("hyperwhisper").join("models");
+        let models_dir = data_dir.join("omegawhisper").join("models");
 
         if !models_dir.exists() {
             fs::create_dir_all(&models_dir)

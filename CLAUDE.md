@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-**HyperWhisper** is a cross-platform desktop speech-to-text application built with Tauri v2 + React. It provides real-time audio transcription using the Deepgram API, with the ability to record, save, and playback audio recordings.
+**Omegawhisper** is a cross-platform desktop speech-to-text application built with Tauri v2 + React. It provides real-time audio transcription using the Deepgram API, with the ability to record, save, and playback audio recordings.
 
 ## Development Commands
 
@@ -54,7 +54,7 @@ Frontend displays text (final + interim results)
     ↓
 User clicks "Stop"
     ↓
-Rust saves WAV file to ~/.local/share/hyperwhisper/recordings/
+Rust saves WAV file to ~/.local/share/omegawhisper/recordings/
 Rust returns base64 data URL to frontend
     ↓
 Frontend displays waveform + enables audio playback
@@ -81,7 +81,7 @@ Frontend displays waveform + enables audio playback
 **Location:** `src-tauri/src/`
 
 - **lib.rs** (486 lines) - All core application logic
-- **main.rs** - Entry point that calls `hyperwhisper_lib::run()`
+- **main.rs** - Entry point that calls `omegawhisper_lib::run()`
 
 **AudioState** - Shared application state using `Arc<Mutex<>>`:
 - `is_recording` - Recording status flag
@@ -116,7 +116,7 @@ Frontend displays waveform + enables audio playback
 **Audio Processing:**
 - `to_wav_bytes()` - Generates WAV file with proper headers
 - `samples_to_linear16()` - Converts f32 to i16 PCM for Deepgram
-- Recordings saved to `~/.local/share/hyperwhisper/recordings/`
+- Recordings saved to `~/.local/share/omegawhisper/recordings/`
 - Filename format: `YYYY-MM-DD_HH-MM-SS.wav`
 
 **Deepgram Integration:**

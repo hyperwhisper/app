@@ -820,7 +820,7 @@ export function SettingsPage() {
           {appVersion && (
             <div className="pt-4 mt-4 border-t border-white/10">
               <p className="text-xs text-white/30 text-center">
-                HyperWhisper v{appVersion}
+                Omegawhisper v{appVersion}
               </p>
             </div>
           )}

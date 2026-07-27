@@ -3,6 +3,6 @@
 <plist version="1.0">
 <dict>
     <key>NSMicrophoneUsageDescription</key>
-    <string>HyperWhisper needs microphone access to record and transcribe your speech.</string>
+    <string>Omegawhisper needs microphone access to record and transcribe your speech.</string>
 </dict>
 </plist>
