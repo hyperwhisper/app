@@ -37,7 +37,7 @@ hex = "0.4"
 rubato = "0.15"
 clap = { version = "4", features = ["derive"] }
 # Multi-model local transcription
-transcribe-rs = { version = "0.2", features = ["whisper", "parakeet", "moonshine"] }
+transcribe-rs = { version = "0.3", features = ["onnx", "whisper-cpp"] }
 # Note: silero-vad-rs has ort version conflict with transcribe-rs, using simple energy-based VAD instead
 
 [dependencies.async-trait]
