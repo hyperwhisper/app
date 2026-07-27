@@ -2,7 +2,7 @@
 name = "hyperwhisper"
 version = "0.1.0"
 description = "The most productive speech to text app for linux"
-authors = ["shenoy.ameya@gmail.com"]
+authors = ["shenoy.ameya@gmail.com", "Deyan Danailov <webtemp@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

@@ -212,3 +212,10 @@ app/
 ## License
 
 [GPLv3](./LICENSE)
+
+- Copyright (C) 2026 Ameya Shenoy &lt;shenoy.ameya@gmail.com&gt;
+- Copyright (C) 2026 Deyan Danailov &lt;webtemp@gmail.com&gt;
+
+This is a modified fork of [hyperwhisper](https://github.com/hyperwhisper/app).
+Modifications by Deyan Danailov, from July 2026 onward, including macOS
+background dictation.
