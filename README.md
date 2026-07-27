@@ -5,31 +5,60 @@
 <h1 align="center">Omegawhisper</h1>
 
 <p align="center">
-  A cross-platform desktop speech-to-text application with real-time transcription
+  A desktop speech-to-text app for macOS, with real-time transcription
 </p>
 
 ---
 
+> **This is a macOS-focused fork.**
+> Upstream [hyperwhisper](https://github.com/hyperwhisper/app) targets Linux. This fork
+> adds background dictation for macOS: a global F3 shortcut, a spectrogram indicator
+> window, and local offline transcription.
+>
+> The Linux code is inherited from upstream and left in place, but it is **not tested
+> here**. If you are on Linux, use upstream instead.
+
 ## About
 
-Omegawhisper is a lightweight desktop application that provides real-time audio transcription using the Deepgram API. Record your voice, get instant transcriptions, and optionally auto-type the text directly into any application.
+Omegawhisper is a lightweight desktop application that transcribes your speech.
+Record your voice, get instant transcriptions, and optionally auto-type the text
+directly into any application.
+
+Transcription can run three ways:
+
+- **Local** - models run offline on your machine. Nothing leaves your computer.
+- **Hyperwhisper hosted server** - the upstream project's service.
+- **Deepgram** - your own Deepgram API key.
 
 ### Features
 
 - Real-time speech-to-text transcription
 - Auto-type transcribed text directly into any application
+- Local offline transcription (Whisper, Parakeet, Moonshine) - no internet needed
 - Audio recording with waveform visualization
 - Recordings saved locally as WAV files
 - Support for multiple audio input devices
 - Dark theme UI
-- Global keyboard shortcut support via D-Bus
 - Works with the Hyperwhisper hosted server or with Deepgram APIs
+
+**macOS only:**
+
+- Runs as a background menu-bar app - no Dock icon, no window in your way
+- Global **F3** shortcut to dictate into whatever app you are using
+- Spectrogram indicator window while recording
+- Language menu: auto-detect, English, Bulgarian
+
+**Linux only (inherited from upstream, untested here):**
+
+- Global keyboard shortcut support via D-Bus
 
 ## Installation
 
 ### Download
 
 Download the latest release for your platform from the [Releases](https://github.com/webtemp/omegawhisper/releases) page.
+
+**macOS:** no prebuilt release yet - see [macOS — build from source](#macos--build-from-source) below.
 
 **Linux:**
 
@@ -102,25 +131,82 @@ nix build
   nix build
   ```
 
-- Steps to enable auto-type on MacOS
+### macOS — build from source
 
-  - Goto `Settings` -> `Privacy & Security` -> `Accessibility`
-  - Add `Omegawhisper` here and enable it
+Tested on Apple Silicon. There are no prebuilt macOS releases yet.
 
-- For MacOS:
-  - you'll need rust and bun
-    ```sh
-    brew tap oven-sh/bun
-    brew install bun
+**1. Install the build tools**
 
-    brew install rust
-    ```
+```sh
+# Xcode command line tools (C/C++ compiler and linker)
+xcode-select --install
 
-  ```sh
-  git clone https://github.com/webtemp/omegawhisper.git
-  cd omegawhisper
-  bun tauri build
-  ```
+# Rust, via rustup (Homebrew's rust package is not recommended for Tauri)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+
+# Bun
+brew tap oven-sh/bun
+brew install bun
+
+# CMake - required to compile whisper-rs-sys for local transcription.
+# The build fails without it.
+brew install cmake
+```
+
+**2. Clone and install dependencies**
+
+```sh
+git clone https://github.com/webtemp/omegawhisper.git
+cd omegawhisper
+bun install
+```
+
+`bun install` is not optional. The `tauri` command comes from `@tauri-apps/cli`,
+which is a devDependency - without this step `bun tauri build` fails with
+"command not found".
+
+**3. Build**
+
+```sh
+bun tauri build --bundles app     # .app only, fastest
+# or
+bun tauri build                   # all bundle formats
+```
+
+The first build compiles whisper.cpp and ONNX Runtime from source and takes a
+while. Later builds are much faster.
+
+Output: `src-tauri/target/release/bundle/macos/Omegawhisper.app`
+
+**4. Install**
+
+```sh
+cp -R src-tauri/target/release/bundle/macos/Omegawhisper.app /Applications/
+open /Applications/Omegawhisper.app
+```
+
+When replacing an existing install, quit the app first and use `rsync` rather
+than `rm -rf`. macOS App Management protection blocks deleting an `.app` folder
+in `/Applications` and can leave it half-deleted:
+
+```sh
+rsync -a --delete src-tauri/target/release/bundle/macos/Omegawhisper.app/ /Applications/Omegawhisper.app/
+```
+
+**5. Grant permissions**
+
+- **Accessibility** - required to type text into other apps.
+  `Settings` -> `Privacy & Security` -> `Accessibility`, add
+  `/Applications/Omegawhisper.app` and switch it on.
+- **Microphone** - macOS asks the first time you record.
+
+These builds are unsigned, so **every rebuild invalidates the Accessibility
+grant**. Reset it and re-add the app after each build:
+
+```sh
+tccutil reset Accessibility dev.omegawhisper
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+```
 
 ## Usage
 
@@ -158,7 +244,10 @@ Bind this command to a keyboard shortcut in your desktop environment for hands-f
 
 - [Rust](https://rustup.rs/) (latest stable)
 - [Bun](https://bun.sh/) or Node.js
-- Linux development libraries for Tauri
+- [CMake](https://cmake.org/) - required to compile `whisper-rs-sys` for local
+  transcription. The build fails without it on every platform.
+- Linux: development libraries for Tauri
+- macOS: Xcode command line tools (`xcode-select --install`)
 
 ### Setup
 
