@@ -51,8 +51,6 @@ pub struct AudioState {
     use_vad: Arc<Mutex<bool>>,
     // forced language for local Whisper (None = auto-detect)
     transcription_language: Arc<Mutex<Option<String>>>,
-    // app to restore focus to before auto-typing
-    frontmost_app: Arc<Mutex<Option<String>>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -1100,38 +1098,6 @@ fn set_hyperwhisper_server_settings(
     }
 }
 
-/// Get the name of the app that is currently frontmost (macOS only).
-#[cfg(target_os = "macos")]
-fn capture_frontmost_app() -> Option<String> {
-    let out = std::process::Command::new("osascript")
-        .args([
-            "-e",
-            "tell application \"System Events\" to get name of first application process whose frontmost is true",
-        ])
-        .output()
-        .ok()?;
-    if out.status.success() {
-        let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        if !name.is_empty() && name != "hyperwhisper" {
-            return Some(name);
-        }
-    }
-    None
-}
-
-/// Bring a named app back to the front (macOS only), so typed text lands there.
-#[cfg(target_os = "macos")]
-fn restore_frontmost_app(name: &str) {
-    let safe = name.replace('"', "");
-    let script = format!(
-        "tell application \"System Events\" to set frontmost of process \"{}\" to true",
-        safe
-    );
-    let _ = std::process::Command::new("osascript")
-        .args(["-e", &script])
-        .status();
-}
-
 fn type_text_internal(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
@@ -1210,12 +1176,6 @@ async fn start_recording(
         }
     }
 
-    // remember the active app so we can type back into it
-    #[cfg(target_os = "macos")]
-    {
-        *state.frontmost_app.lock().unwrap() = capture_frontmost_app();
-    }
-
     // Check if using local transcription
     let use_local = *state.use_local_transcription.lock().unwrap();
 
@@ -1257,7 +1217,6 @@ async fn start_recording(
     let use_vad = *state.use_vad.lock().unwrap();
 
     let transcription_language = state.transcription_language.lock().unwrap().clone();
-    let restore_target = state.frontmost_app.lock().unwrap().clone();
 
     // Clone transcription manager for the thread
     let transcription_manager = state.transcription_manager.0.clone();
@@ -1425,11 +1384,6 @@ async fn start_recording(
                         let text = text.trim().to_string();
                         if !text.is_empty() {
                             if auto_type {
-                                #[cfg(target_os = "macos")]
-                                if let Some(ref target) = restore_target {
-                                    restore_frontmost_app(target);
-                                    std::thread::sleep(Duration::from_millis(60));
-                                }
                                 let _ = type_text_internal(&format!("{} ", text));
                             }
                             let event = TranscriptionEvent {
@@ -1876,7 +1830,6 @@ pub fn run() {
         transcription_manager,
         use_vad: Arc::new(Mutex::new(false)),
         transcription_language: Arc::new(Mutex::new(None)),
-        frontmost_app: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
