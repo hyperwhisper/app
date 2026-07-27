@@ -247,11 +247,12 @@ function App() {
     };
   }, []);
 
-  // Play a calming tone when transcription completes
-  const playCompletionTone = useCallback(() => {
+  // Play a soft two-note chime. Both cues use this, with different notes:
+  // recording starts on a low descending pair, text arrives on a higher
+  // ascending pair, so the two are easy to tell apart without being sharp.
+  const playChime = useCallback((notes: { frequency: number; delay: number; duration: number }[]) => {
     const audioCtx = new AudioContext();
 
-    // Create a gentle two-note chime (C5 and E5 - a pleasant major third)
     const playNote = (frequency: number, startTime: number, duration: number) => {
       const oscillator = audioCtx.createOscillator();
       const gainNode = audioCtx.createGain();
@@ -278,13 +279,28 @@ function App() {
     };
 
     const now = audioCtx.currentTime;
-    // C5 (523 Hz) followed by E5 (659 Hz) - a calming ascending major third
-    playNote(523.25, now, 0.4);
-    playNote(659.25, now + 0.08, 0.52);
+    notes.forEach((n) => playNote(n.frequency, now + n.delay, n.duration));
 
     // Clean up after tones finish
     setTimeout(() => audioCtx.close(), 1200);
   }, []);
+
+  // Recording started: G4 down to C4, a calm descending fifth in a lower
+  // register. Kept short so it does not sit on top of your first words.
+  const playStartTone = useCallback(() => {
+    playChime([
+      { frequency: 392.0, delay: 0, duration: 0.3 },
+      { frequency: 261.63, delay: 0.08, duration: 0.42 },
+    ]);
+  }, [playChime]);
+
+  // Text is ready: C5 up to E5, a calming ascending major third.
+  const playCompletionTone = useCallback(() => {
+    playChime([
+      { frequency: 523.25, delay: 0, duration: 0.4 },
+      { frequency: 659.25, delay: 0.08, duration: 0.52 },
+    ]);
+  }, [playChime]);
 
   // Listen for transcription processing state (grace period after recording stops)
   useEffect(() => {
@@ -513,6 +529,7 @@ function App() {
 
       await invoke("start_recording");
       setIsRecording(true);
+      playStartTone();
     } catch (err) {
       showToast(`Could not start recording: ${err}`);
     }
