@@ -5,18 +5,25 @@
 <h1 align="center">Omegawhisper</h1>
 
 <p align="center">
-  A desktop speech-to-text app for macOS, with real-time transcription
+  A fork of hyperwhisper that exists to make dictation good on macOS
 </p>
 
 ---
 
-> **This is a macOS-focused fork.**
-> Upstream [hyperwhisper](https://github.com/hyperwhisper/app) targets Linux. This fork
-> adds background dictation for macOS: a global F3 shortcut, a spectrogram indicator
-> window, and local offline transcription.
+> ### On Linux? Use [hyperwhisper](https://github.com/hyperwhisper/app) instead.
 >
-> The Linux code is inherited from upstream and left in place, but it is **not tested
-> here**. If you are on Linux, use upstream instead.
+> This is a fork of [**hyperwhisper**](https://github.com/hyperwhisper/app), a desktop
+> speech-to-text app with real-time transcription for Linux and macOS. Everything good
+> here started there.
+>
+> The only reason this fork exists is to make the macOS experience better. All the work
+> goes into the Mac side. The Linux code is inherited from upstream, left untouched, and
+> **never tested here** - so on Linux you would be running an out-of-date copy of the
+> original with no benefit. Go to upstream.
+>
+> On macOS, this fork adds background dictation: a global **F3** shortcut that types into
+> whatever app you are using, a spectrogram indicator while you speak, and fully offline
+> local transcription.
 
 ## About
 
