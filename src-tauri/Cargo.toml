@@ -51,3 +51,9 @@ features = ["sync", "rt-multi-thread", "macros", "time"]
 # Posts typed text as Unicode key events. Version matches the copy Tauri
 # already pulls in, so this adds no extra build.
 core-graphics = "0.25"
+# Run the models on the Mac GPU instead of the CPU. Without these the log
+# says "no GPU found" and falls back to BLAS on the CPU, which took about
+# 7 seconds for 3 seconds of speech. Cargo adds these features to the ones
+# already listed in [dependencies]. Kept macOS-only: Metal and CoreML do
+# not exist on Linux.
+transcribe-rs = { version = "0.3", features = ["whisper-metal", "ort-coreml"] }
