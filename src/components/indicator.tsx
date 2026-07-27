@@ -190,10 +190,7 @@ export function Indicator() {
       style={{
         width: "100vw",
         height: "100vh",
-        background: "rgba(8, 10, 20, 0.72)",
-        backdropFilter: "blur(18px)",
-        WebkitBackdropFilter: "blur(18px)",
-        borderRadius: 18,
+        background: "transparent",
         overflow: "hidden",
       }}
     >
