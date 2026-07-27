@@ -1900,6 +1900,8 @@ pub fn run() {
 
                 let open_item =
                     MenuItem::with_id(app, "open_settings", "Open hyperwhisper", true, None::<&str>)?;
+                let settings_item =
+                    MenuItem::with_id(app, "open_settings_window", "Settings...", true, None::<&str>)?;
                 let hide_item =
                     MenuItem::with_id(app, "hide_window", "Hide window", true, None::<&str>)?;
 
@@ -1918,7 +1920,7 @@ pub fn run() {
                 let sep = PredefinedMenuItem::separator(app)?;
                 let menu = Menu::with_items(
                     app,
-                    &[&open_item, &hide_item, &lang_menu, &sep, &quit_item],
+                    &[&open_item, &settings_item, &hide_item, &lang_menu, &sep, &quit_item],
                 )?;
 
                 let (la, le, lb) = (lang_auto.clone(), lang_en.clone(), lang_bg.clone());
@@ -1934,6 +1936,55 @@ pub fn run() {
                             if let Some(w) = app.get_webview_window("main") {
                                 let _ = w.show();
                                 let _ = w.set_focus();
+                            }
+                        }
+                        "open_settings_window" => {
+                            // regular app so the window is focusable
+                            #[cfg(target_os = "macos")]
+                            let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
+                            if let Some(w) = app.get_webview_window("settings") {
+                                let _ = w.show();
+                                let _ = w.set_focus();
+                            } else {
+                                use tauri::{WebviewUrl, WebviewWindowBuilder};
+                                // same window shape as the in-app settings button
+                                match WebviewWindowBuilder::new(
+                                    app,
+                                    "settings",
+                                    WebviewUrl::App("settings".into()),
+                                )
+                                .title("Settings")
+                                .inner_size(450.0, 550.0)
+                                .decorations(false)
+                                .transparent(true)
+                                .resizable(false)
+                                .center()
+                                .build()
+                                {
+                                    Ok(w) => {
+                                        let _ = w.set_focus();
+                                        // back to background agent when settings closes
+                                        // and the main window is not on screen
+                                        #[cfg(target_os = "macos")]
+                                        {
+                                            let handle = app.clone();
+                                            w.on_window_event(move |event| {
+                                                if let tauri::WindowEvent::Destroyed = event {
+                                                    let main_visible = handle
+                                                        .get_webview_window("main")
+                                                        .and_then(|m| m.is_visible().ok())
+                                                        .unwrap_or(false);
+                                                    if !main_visible {
+                                                        let _ = handle.set_activation_policy(
+                                                            tauri::ActivationPolicy::Accessory,
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    }
+                                    Err(e) => eprintln!("Failed to create settings window: {}", e),
+                                }
                             }
                         }
                         "hide_window" => {
