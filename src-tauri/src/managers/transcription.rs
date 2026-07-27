@@ -15,11 +15,19 @@ enum LoadedEngine {
 impl LoadedEngine {
     /// Transcribe audio samples (expects 16kHz mono f32 audio).
     /// Samples go straight to the engine - no temp WAV file needed.
-    fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
+    fn transcribe(
+        &mut self,
+        samples: &[f32],
+        language: Option<String>,
+        translate: bool,
+    ) -> Result<String, String> {
         let result = match self {
             LoadedEngine::Whisper(engine) => {
+                // translate makes Whisper output English whatever was spoken.
+                // Only Whisper can do this; the other engines ignore it.
                 let params = WhisperInferenceParams {
                     language,
+                    translate,
                     ..Default::default()
                 };
                 engine
@@ -149,13 +157,19 @@ impl TranscriptionManager {
     }
 
     /// Transcribe 16kHz mono f32 audio. `language` None = auto-detect.
-    pub fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
+    /// `translate` true returns English text whatever language was spoken.
+    pub fn transcribe(
+        &mut self,
+        samples: &[f32],
+        language: Option<String>,
+        translate: bool,
+    ) -> Result<String, String> {
         let engine = self
             .loaded_engine
             .as_mut()
             .ok_or("No model loaded")?;
 
-        engine.transcribe(samples, language)
+        engine.transcribe(samples, language, translate)
     }
 
 }

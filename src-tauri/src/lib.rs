@@ -51,6 +51,8 @@ pub struct AudioState {
     use_vad: Arc<Mutex<bool>>,
     // forced language for local Whisper (None = auto-detect)
     transcription_language: Arc<Mutex<Option<String>>>,
+    // Return English text whatever language was spoken. Whisper models only.
+    translate_to_english: Arc<Mutex<bool>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -290,6 +292,52 @@ fn get_recordings_dir() -> Result<PathBuf, String> {
     }
 
     Ok(recordings_dir)
+}
+
+// The language and translate choices live in the tray menu, which has no
+// browser storage behind it, so they are kept in a small file next to the
+// models. Without this both reset to auto-detect on every restart.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct TrayPrefs {
+    /// None means auto-detect.
+    language: Option<String>,
+    translate_to_english: bool,
+}
+
+fn tray_prefs_path() -> Option<PathBuf> {
+    dirs::data_local_dir().map(|d| d.join("omegawhisper").join("tray-prefs.json"))
+}
+
+fn load_tray_prefs() -> TrayPrefs {
+    let Some(path) = tray_prefs_path() else {
+        return TrayPrefs::default();
+    };
+    match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str(&text).unwrap_or_else(|e| {
+            eprintln!("Ignoring unreadable {}: {}", path.display(), e);
+            TrayPrefs::default()
+        }),
+        // Missing file just means nothing has been chosen yet.
+        Err(_) => TrayPrefs::default(),
+    }
+}
+
+fn save_tray_prefs(prefs: &TrayPrefs) {
+    let Some(path) = tray_prefs_path() else { return };
+    if let Some(parent) = path.parent() {
+        if let Err(e) = fs::create_dir_all(parent) {
+            eprintln!("Could not create {}: {}", parent.display(), e);
+            return;
+        }
+    }
+    match serde_json::to_string_pretty(prefs) {
+        Ok(text) => {
+            if let Err(e) = fs::write(&path, text) {
+                eprintln!("Could not save {}: {}", path.display(), e);
+            }
+        }
+        Err(e) => eprintln!("Could not encode tray settings: {}", e),
+    }
 }
 
 // The data folder was called "hyperwhisper" before the app was renamed to
@@ -1320,6 +1368,7 @@ async fn start_recording(
     let use_vad = *state.use_vad.lock().unwrap();
 
     let transcription_language = state.transcription_language.lock().unwrap().clone();
+    let translate_to_english = *state.translate_to_english.lock().unwrap();
 
     // Clone transcription manager for the thread
     let transcription_manager = state.transcription_manager.0.clone();
@@ -1484,7 +1533,11 @@ async fn start_recording(
                 let started = std::time::Instant::now();
                 let result = {
                     let mut manager = transcription_manager.lock().unwrap();
-                    manager.transcribe(&all_audio, transcription_language.clone())
+                    manager.transcribe(
+                        &all_audio,
+                        transcription_language.clone(),
+                        translate_to_english,
+                    )
                 };
                 eprintln!(
                     "Transcribed {:.1}s of audio in {:.1}s",
@@ -1949,6 +2002,9 @@ pub fn run() {
         );
     }
 
+    // Language and translate choices from the last run.
+    let saved_prefs = load_tray_prefs();
+
     // Initialize model manager
     let model_manager = Arc::new(
         ModelManager::new().expect("Failed to initialize model manager")
@@ -1976,7 +2032,8 @@ pub fn run() {
         transcription_manager,
         // Keep speech only. Feeding silence to Whisper makes it invent text.
         use_vad: Arc::new(Mutex::new(true)),
-        transcription_language: Arc::new(Mutex::new(None)),
+        transcription_language: Arc::new(Mutex::new(saved_prefs.language.clone())),
+        translate_to_english: Arc::new(Mutex::new(saved_prefs.translate_to_english)),
     };
 
     tauri::Builder::default()
@@ -2053,24 +2110,64 @@ pub fn run() {
                     MenuItem::with_id(app, "hide_window", "Hide window", true, None::<&str>)?;
 
                 // Language submenu (affects local Whisper transcription only).
-                let lang_auto =
-                    CheckMenuItem::with_id(app, "lang_auto", "Auto-detect", true, true, None::<&str>)?;
-                let lang_en =
-                    CheckMenuItem::with_id(app, "lang_en", "English", true, false, None::<&str>)?;
-                let lang_bg =
-                    CheckMenuItem::with_id(app, "lang_bg", "Bulgarian", true, false, None::<&str>)?;
+                // Tick whatever was chosen last time, not always Auto-detect.
+                let saved_language = app.state::<AudioState>().transcription_language.lock().unwrap().clone();
+                let lang_auto = CheckMenuItem::with_id(
+                    app,
+                    "lang_auto",
+                    "Auto-detect",
+                    true,
+                    saved_language.is_none(),
+                    None::<&str>,
+                )?;
+                let lang_en = CheckMenuItem::with_id(
+                    app,
+                    "lang_en",
+                    "English",
+                    true,
+                    saved_language.as_deref() == Some("en"),
+                    None::<&str>,
+                )?;
+                let lang_bg = CheckMenuItem::with_id(
+                    app,
+                    "lang_bg",
+                    "Bulgarian",
+                    true,
+                    saved_language.as_deref() == Some("bg"),
+                    None::<&str>,
+                )?;
                 let lang_menu =
                     Submenu::with_items(app, "Language", true, &[&lang_auto, &lang_en, &lang_bg])?;
+
+                // Speak any language, get English text. Whisper models only.
+                let saved_translate = *app.state::<AudioState>().translate_to_english.lock().unwrap();
+                let translate_item = CheckMenuItem::with_id(
+                    app,
+                    "translate_english",
+                    "Translate to English",
+                    true,
+                    saved_translate,
+                    None::<&str>,
+                )?;
 
                 let quit_item =
                     MenuItem::with_id(app, "quit", "Quit Omegawhisper", true, None::<&str>)?;
                 let sep = PredefinedMenuItem::separator(app)?;
                 let menu = Menu::with_items(
                     app,
-                    &[&open_item, &settings_item, &hide_item, &lang_menu, &sep, &quit_item],
+                    &[
+                        &open_item,
+                        &settings_item,
+                        &hide_item,
+                        &lang_menu,
+                        &translate_item,
+                        &sep,
+                        &quit_item,
+                    ],
                 )?;
 
                 let (la, le, lb) = (lang_auto.clone(), lang_en.clone(), lang_bg.clone());
+                let tr = translate_item.clone();
 
                 let mut tray = TrayIconBuilder::new()
                     .menu(&menu)
@@ -2141,25 +2238,37 @@ pub fn run() {
                             #[cfg(target_os = "macos")]
                             let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                         }
-                        "lang_auto" => {
-                            *app.state::<AudioState>().transcription_language.lock().unwrap() = None;
-                            let _ = la.set_checked(true);
-                            let _ = le.set_checked(false);
-                            let _ = lb.set_checked(false);
+                        "lang_auto" | "lang_en" | "lang_bg" => {
+                            let language = match event.id.as_ref() {
+                                "lang_en" => Some("en".to_string()),
+                                "lang_bg" => Some("bg".to_string()),
+                                _ => None,
+                            };
+                            let state = app.state::<AudioState>();
+                            *state.transcription_language.lock().unwrap() = language.clone();
+
+                            let _ = la.set_checked(language.is_none());
+                            let _ = le.set_checked(language.as_deref() == Some("en"));
+                            let _ = lb.set_checked(language.as_deref() == Some("bg"));
+
+                            save_tray_prefs(&TrayPrefs {
+                                language,
+                                translate_to_english: *state.translate_to_english.lock().unwrap(),
+                            });
                         }
-                        "lang_en" => {
-                            *app.state::<AudioState>().transcription_language.lock().unwrap() =
-                                Some("en".to_string());
-                            let _ = la.set_checked(false);
-                            let _ = le.set_checked(true);
-                            let _ = lb.set_checked(false);
-                        }
-                        "lang_bg" => {
-                            *app.state::<AudioState>().transcription_language.lock().unwrap() =
-                                Some("bg".to_string());
-                            let _ = la.set_checked(false);
-                            let _ = le.set_checked(false);
-                            let _ = lb.set_checked(true);
+                        "translate_english" => {
+                            let state = app.state::<AudioState>();
+                            let enabled = {
+                                let mut flag = state.translate_to_english.lock().unwrap();
+                                *flag = !*flag;
+                                *flag
+                            };
+                            let _ = tr.set_checked(enabled);
+
+                            save_tray_prefs(&TrayPrefs {
+                                language: state.transcription_language.lock().unwrap().clone(),
+                                translate_to_english: enabled,
+                            });
                         }
                         "quit" => app.exit(0),
                         _ => {}
