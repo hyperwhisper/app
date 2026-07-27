@@ -46,3 +46,8 @@ version = "0.1"
 [dependencies.tokio]
 version = "1"
 features = ["sync", "rt-multi-thread", "macros", "time"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Posts typed text as Unicode key events. Version matches the copy Tauri
+# already pulls in, so this adds no extra build.
+core-graphics = "0.25"
