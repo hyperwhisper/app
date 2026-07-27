@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineParams, MoonshineVariant};
 use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
 use transcribe_rs::onnx::Quantization;
-use transcribe_rs::whisper_cpp::{WhisperEngine, WhisperInferenceParams};
+use transcribe_rs::whisper_cpp::{WhisperEngine, WhisperInferenceParams, WhisperLoadParams};
 
 /// Loaded transcription engine
 enum LoadedEngine {
@@ -102,7 +102,15 @@ impl TranscriptionManager {
                 let model_file = files.first().ok_or("No model file defined")?;
                 let full_path = model_path.join(model_file.filename);
 
-                let whisper = WhisperEngine::load(&full_path)
+                // Load explicitly instead of WhisperEngine::load, whose defaults
+                // turn flash attention on. Flash attention was off before the
+                // transcribe-rs 0.3 upgrade and turning it on made Whisper
+                // output repeated nonsense, sometimes in the wrong language.
+                let params = WhisperLoadParams {
+                    flash_attn: false,
+                    ..Default::default()
+                };
+                let whisper = WhisperEngine::load_with_params(&full_path, params)
                     .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
 
                 LoadedEngine::Whisper(whisper)
