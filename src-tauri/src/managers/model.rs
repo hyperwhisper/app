@@ -300,11 +300,7 @@ impl ModelManager {
     }
 
     /// Download a model with progress events
-    pub fn download_model(
-        &self,
-        model_id: &str,
-        app_handle: &AppHandle,
-    ) -> Result<(), String> {
+    pub fn download_model(&self, model_id: &str, app_handle: &AppHandle) -> Result<(), String> {
         let model = self
             .get_model_info(model_id)
             .ok_or_else(|| format!("Unknown model: {}", model_id))?;

@@ -98,8 +98,7 @@ export function Indicator() {
   const [transcribing, setTranscribing] = useState(false);
   // The line of live numbers is off unless switched on in the tray menu.
   const [showStats, setShowStats] = useState(false);
-  // The drawing loop is set up once and cannot read React state, so it reads
-  // this instead - it skips the pitch maths entirely while the line is hidden.
+  // The drawing loop cannot read React state, so it reads this.
   const showStatsRef = useRef(false);
 
   // The ring only draws while the model is working.
@@ -211,7 +210,11 @@ export function Indicator() {
         return;
       }
       const ctx = canvas.getContext("2d");
-      if (!ctx) return;
+      if (!ctx) {
+        // Without this the loop ends for good and the window stays blank.
+        raf = requestAnimationFrame(draw);
+        return;
+      }
 
       const dpr = window.devicePixelRatio || 1;
       const w = canvas.clientWidth;
@@ -225,7 +228,7 @@ export function Indicator() {
 
       frame++;
       if (frame % 2 === 0) pushRow();
-      // Pitch is the expensive part, so the panel refreshes ~6 times a second.
+      // Every frame is unreadable; ~6 times a second is not.
       if (frame % 10 === 0) updateStats();
 
       const originY = h * 0.9;

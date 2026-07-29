@@ -6,9 +6,7 @@ use audio::VadProcessor;
 use chrono::{Local, Utc};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
-use managers::{
-    ModelManager, ModelStatus, SharedTranscriptionManager, AVAILABLE_MODELS,
-};
+use managers::{ModelManager, ModelStatus, SharedTranscriptionManager, AVAILABLE_MODELS};
 use resampler::AudioResampler;
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -175,9 +173,9 @@ fn generate_device_fingerprint() -> String {
         hasher.update(machine_id.trim().as_bytes());
     } else {
         // Fallback: use hostname and username
-        if let Ok(hostname) = std::env::var("HOSTNAME").or_else(|_| {
-            fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string())
-        }) {
+        if let Ok(hostname) = std::env::var("HOSTNAME")
+            .or_else(|_| fs::read_to_string("/etc/hostname").map(|s| s.trim().to_string()))
+        {
             hasher.update(hostname.as_bytes());
         }
         if let Ok(user) = std::env::var("USER") {
@@ -206,7 +204,10 @@ fn get_hyperwhisper_api_base(server_url: &str, use_https: bool) -> String {
 }
 
 // Internal function to provision trial key (used by both command and auto-provision)
-fn provision_trial_key_internal(server_url: &str, use_https: bool) -> Result<TrialProvisionResponse, String> {
+fn provision_trial_key_internal(
+    server_url: &str,
+    use_https: bool,
+) -> Result<TrialProvisionResponse, String> {
     let fingerprint = generate_device_fingerprint();
     let base_url = get_hyperwhisper_api_base(server_url, use_https);
     let url = format!("{}/api/v1/trial/provision", base_url);
@@ -317,8 +318,8 @@ fn get_device_fingerprint() -> String {
 
 // Get the recordings directory, creating it if necessary
 fn get_recordings_dir() -> Result<PathBuf, String> {
-    let data_dir = dirs::data_local_dir()
-        .ok_or_else(|| "Could not find local data directory".to_string())?;
+    let data_dir =
+        dirs::data_local_dir().ok_or_else(|| "Could not find local data directory".to_string())?;
     let recordings_dir = data_dir.join("omegawhisper").join("recordings");
 
     if !recordings_dir.exists() {
@@ -361,7 +362,9 @@ fn load_tray_prefs() -> TrayPrefs {
 }
 
 fn save_tray_prefs(prefs: &TrayPrefs) {
-    let Some(path) = tray_prefs_path() else { return };
+    let Some(path) = tray_prefs_path() else {
+        return;
+    };
     if let Some(parent) = path.parent() {
         if let Err(e) = fs::create_dir_all(parent) {
             eprintln!("Could not create {}: {}", parent.display(), e);
@@ -451,7 +454,8 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
     let mut in_devices_section = false;
 
     // First pass: collect device names from Devices section (for friendly Bluetooth names)
-    let mut bluetooth_device_names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut bluetooth_device_names: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for line in status.lines() {
         if line.starts_with("Audio") {
@@ -479,7 +483,7 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
         }
 
         if in_devices_section {
-            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─' || c == '*');
+            let trimmed = line.trim_start_matches([' ', '│', '├', '─', '*']);
             if let Some(dot_pos) = trimmed.find(". ") {
                 let rest = &trimmed[dot_pos + 2..];
                 // Check if it's a Bluetooth device
@@ -527,20 +531,22 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
         }
 
         // Exit sections when we hit another section
-        if (in_sources_section || in_filters_section) && (line.contains("├─") || line.contains("└─")) {
+        if (in_sources_section || in_filters_section)
+            && (line.contains("├─") || line.contains("└─"))
+        {
             in_sources_section = false;
             in_filters_section = false;
             continue;
         }
 
         if in_sources_section {
-            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─');
+            let trimmed = line.trim_start_matches([' ', '│', '├', '─']);
 
             if trimmed.is_empty() {
                 continue;
             }
 
-            let trimmed = trimmed.trim_start_matches(|c| c == '*' || c == ' ');
+            let trimmed = trimmed.trim_start_matches(['*', ' ']);
 
             if let Some(dot_pos) = trimmed.find(". ") {
                 if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
@@ -566,14 +572,18 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
                         };
 
                         // Built-in microphone is the default
-                        devices.push(WpDevice { id, name: friendly_name, is_default: is_builtin });
+                        devices.push(WpDevice {
+                            id,
+                            name: friendly_name,
+                            is_default: is_builtin,
+                        });
                     }
                 }
             }
         }
 
         if in_filters_section {
-            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─' || c == '-');
+            let trimmed = line.trim_start_matches([' ', '│', '├', '─', '-']);
 
             if trimmed.is_empty() {
                 continue;
@@ -582,7 +592,7 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
             // Look for Bluetooth audio sources: "146. bluez_input.XX:XX:XX [Audio/Source]"
             if trimmed.contains("[Audio/Source]") && trimmed.contains("bluez_input") {
                 let is_default = trimmed.starts_with('*');
-                let trimmed = trimmed.trim_start_matches(|c| c == '*' || c == ' ');
+                let trimmed = trimmed.trim_start_matches(['*', ' ']);
 
                 if let Some(dot_pos) = trimmed.find(". ") {
                     if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
@@ -597,7 +607,11 @@ fn list_audio_devices() -> Result<Vec<WpDevice>, String> {
                             }
                         }
 
-                        devices.push(WpDevice { id, name: friendly_name, is_default });
+                        devices.push(WpDevice {
+                            id,
+                            name: friendly_name,
+                            is_default,
+                        });
                     }
                 }
             }
@@ -669,7 +683,7 @@ fn find_builtin_microphone_id() -> Option<u32> {
         }
 
         if in_sources_section {
-            let trimmed = line.trim_start_matches(|c| c == ' ' || c == '│' || c == '├' || c == '─' || c == '*');
+            let trimmed = line.trim_start_matches([' ', '│', '├', '─', '*']);
             if let Some(dot_pos) = trimmed.find(". ") {
                 if let Ok(id) = trimmed[..dot_pos].trim().parse::<u32>() {
                     let rest = &trimmed[dot_pos + 2..];
@@ -766,11 +780,9 @@ async fn download_model(
     let model_manager = state.model_manager.clone();
 
     // Run download in a blocking thread
-    tokio::task::spawn_blocking(move || {
-        model_manager.download_model(&model_id, &app_handle)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?
+    tokio::task::spawn_blocking(move || model_manager.download_model(&model_id, &app_handle))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?
 }
 
 /// Delete a model
@@ -861,9 +873,13 @@ fn check_local_model_status(state: State<'_, AudioState>) -> Result<serde_json::
         .any(|m| state.model_manager.is_model_downloaded(m.id));
 
     let active_model = state.active_local_model_id.lock().unwrap().clone();
-    let path = active_model
-        .as_ref()
-        .map(|id| state.model_manager.get_model_path(id).to_string_lossy().to_string());
+    let path = active_model.as_ref().map(|id| {
+        state
+            .model_manager
+            .get_model_path(id)
+            .to_string_lossy()
+            .to_string()
+    });
 
     Ok(serde_json::json!({
         "downloaded": any_downloaded,
@@ -884,7 +900,10 @@ async fn download_local_model(
 
     tokio::task::spawn_blocking(move || {
         model_manager.download_model(model_id, &app_handle)?;
-        Ok(model_manager.get_model_path(model_id).to_string_lossy().to_string())
+        Ok(model_manager
+            .get_model_path(model_id)
+            .to_string_lossy()
+            .to_string())
     })
     .await
     .map_err(|e| format!("Task join error: {}", e))?
@@ -921,7 +940,8 @@ fn get_input_device() -> Result<Device, String> {
     }
 
     // Fall back to default device
-    let device = host.default_input_device()
+    let device = host
+        .default_input_device()
         .ok_or_else(|| "No audio input device found".to_string())?;
 
     if let Ok(name) = device.name() {
@@ -944,18 +964,20 @@ fn get_safe_input_config(device: &Device) -> Result<SupportedStreamConfig, Strin
 
         for rate in preferred_rates {
             for config in &configs {
-                if config.min_sample_rate().0 <= rate && config.max_sample_rate().0 >= rate {
-                    if config.sample_format() == SampleFormat::F32 {
-                        return Ok(config.clone().with_sample_rate(cpal::SampleRate(rate)));
-                    }
+                if config.min_sample_rate().0 <= rate
+                    && config.max_sample_rate().0 >= rate
+                    && config.sample_format() == SampleFormat::F32
+                {
+                    return Ok((*config).with_sample_rate(cpal::SampleRate(rate)));
                 }
             }
             // If F32 not available at this rate, try I16
             for config in &configs {
-                if config.min_sample_rate().0 <= rate && config.max_sample_rate().0 >= rate {
-                    if config.sample_format() == SampleFormat::I16 {
-                        return Ok(config.clone().with_sample_rate(cpal::SampleRate(rate)));
-                    }
+                if config.min_sample_rate().0 <= rate
+                    && config.max_sample_rate().0 >= rate
+                    && config.sample_format() == SampleFormat::I16
+                {
+                    return Ok((*config).with_sample_rate(cpal::SampleRate(rate)));
                 }
             }
         }
@@ -1072,8 +1094,8 @@ fn frequency_bands(samples: &[f32], fft: &std::sync::Arc<dyn rustfft::Fft<f32>>)
         .iter()
         .enumerate()
         .map(|(i, &s)| {
-            let w = 0.5
-                - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos();
+            let w =
+                0.5 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos();
             Complex::new(s * w, 0.0)
         })
         .collect();
@@ -1098,6 +1120,10 @@ fn frequency_bands(samples: &[f32], fft: &std::sync::Arc<dyn rustfft::Fft<f32>>)
 // Base frequency of the voice, found by looking for the shortest delay after
 // which the wave repeats. 0 when the sound is too quiet or too noisy to tell -
 // a wrong number is worse than none.
+// Anything from 1.02 to 1.06 works; outside that it gets worse in one direction
+// or the other. Do not raise it thinking bigger is safer.
+const PITCH_MARGIN: f32 = 1.05;
+
 fn detect_pitch(samples: &[f32], sample_rate: u32) -> f32 {
     let size = samples.len().min(2048);
     if size < 512 {
@@ -1121,7 +1147,10 @@ fn detect_pitch(samples: &[f32], sample_rate: u32) -> f32 {
             sum += window[i] * window[i + lag];
         }
         let score = sum / (size - lag) as f32;
-        if score > best {
+        // A delay of two or three repeats matches as well as one repeat, so a later
+        // delay has to win clearly, not by rounding. Measured over 816 voices:
+        // 1.0 is wrong 363 times, 1.05 is wrong 7, 1.1 is wrong 56 the other way.
+        if score > best * PITCH_MARGIN {
             best = score;
             best_lag = lag;
         }
@@ -1160,6 +1189,73 @@ fn chunk_level(samples: &[f32]) -> (f32, f32) {
     (peak, (sum_squares / samples.len() as f32).sqrt())
 }
 
+// What the capture callback writes into.
+struct CaptureTargets {
+    is_recording: Arc<Mutex<bool>>,
+    recorded_samples: Arc<Mutex<Vec<f32>>>,
+    mic_level: Arc<Mutex<(f32, f32)>>,
+    mic_recent: Arc<Mutex<Vec<f32>>>,
+    audio_tx: std::sync::mpsc::Sender<Vec<f32>>,
+    channels: u16,
+}
+
+fn i16_to_f32(sample: i16) -> f32 {
+    sample as f32 / i16::MAX as f32
+}
+
+// Unsigned samples put silence in the middle of the range, so shift as well as scale.
+fn u16_to_f32(sample: u16) -> f32 {
+    (sample as f32 / u16::MAX as f32) * 2.0 - 1.0
+}
+
+// Stereo arrives as left, right, left, right.
+fn mix_to_mono(buffer: Vec<f32>, channels: u16) -> Vec<f32> {
+    if channels <= 1 {
+        return buffer;
+    }
+    let mut mono = Vec::with_capacity(buffer.len().div_ceil(channels as usize));
+    for frame in buffer.chunks(channels as usize) {
+        mono.push(frame.iter().sum::<f32>() / frame.len() as f32);
+    }
+    mono
+}
+
+// Runs on the audio thread: store and hand off, never wait.
+fn build_capture_stream<T>(
+    device: &Device,
+    config: &cpal::StreamConfig,
+    targets: CaptureTargets,
+    to_f32: fn(T) -> f32,
+) -> Result<cpal::Stream, cpal::BuildStreamError>
+where
+    T: cpal::SizedSample + 'static,
+{
+    device.build_input_stream(
+        config,
+        move |data: &[T], _: &cpal::InputCallbackInfo| {
+            if !*targets.is_recording.lock().unwrap() {
+                return;
+            }
+            let buffer: Vec<f32> = data.iter().copied().map(to_f32).collect();
+            let buffer = mix_to_mono(buffer, targets.channels);
+            // Store for the WAV file
+            targets
+                .recorded_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffer);
+            *targets.mic_level.lock().unwrap() = chunk_level(&buffer);
+            keep_recent(&targets.mic_recent, &buffer);
+            // Hand to the transcription thread
+            let _ = targets.audio_tx.send(buffer);
+        },
+        |err| {
+            eprintln!("Error in audio stream: {}", err);
+        },
+        None,
+    )
+}
+
 // How loud the spoken parts are, ignoring pauses and one-off bangs.
 //
 // The recording is cut into 30 ms pieces, each piece's loudness is measured,
@@ -1183,7 +1279,9 @@ fn speech_level(samples: &[f32]) -> f32 {
     }
 
     levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-    levels[(levels.len() as f32 * 0.9) as usize % levels.len()]
+    // Clamp, not wrap: wrapping would return the quietest frame.
+    let index = ((levels.len() as f32 * 0.9) as usize).min(levels.len() - 1);
+    levels[index]
 }
 
 // Wall-clock time for the log, so a recording that nobody meant to start can
@@ -1198,6 +1296,11 @@ fn now() -> String {
 // an empty room measured 0.0014 and 0.02.
 const MIN_SPEECH_LEVEL: f32 = 0.005;
 const MIN_SPEECH_PEAK: f32 = 0.05;
+
+// Whisper invents sentences from silence, and auto-type types them.
+fn holds_speech(speech_level: f32, peak: f32) -> bool {
+    speech_level >= MIN_SPEECH_LEVEL && peak >= MIN_SPEECH_PEAK
+}
 
 // Cut the quiet head and tail off, keeping everything in between.
 //
@@ -1353,6 +1456,8 @@ enum WsStream {
     Plain(WebSocket<TcpStream>),
 }
 
+// tungstenite's own error, passed through. Boxing it would only move the cost.
+#[allow(clippy::result_large_err)]
 impl WsStream {
     fn send(&mut self, msg: Message) -> Result<(), tungstenite::Error> {
         match self {
@@ -1368,7 +1473,10 @@ impl WsStream {
         }
     }
 
-    fn close(&mut self, _: Option<tungstenite::protocol::CloseFrame>) -> Result<(), tungstenite::Error> {
+    fn close(
+        &mut self,
+        _: Option<tungstenite::protocol::CloseFrame>,
+    ) -> Result<(), tungstenite::Error> {
         match self {
             WsStream::Tls(ws) => ws.close(None),
             WsStream::Plain(ws) => ws.close(None),
@@ -1421,18 +1529,27 @@ fn connect_to_deepgram(api_key: &str, sample_rate: u32) -> Result<WsStream, Stri
         .header("Connection", "Upgrade")
         .header("Upgrade", "websocket")
         .header("Sec-WebSocket-Version", "13")
-        .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+        .header(
+            "Sec-WebSocket-Key",
+            tungstenite::handshake::client::generate_key(),
+        )
         .body(())
         .map_err(|e| format!("Failed to build request: {}", e))?;
 
-    let (ws, _response) = tungstenite::client::client(request, MaybeTlsStream::NativeTls(tls_stream))
-        .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
+    let (ws, _response) =
+        tungstenite::client::client(request, MaybeTlsStream::NativeTls(tls_stream))
+            .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
 
     Ok(WsStream::Tls(ws))
 }
 
 // Connect to Hyperwhisper server WebSocket
-fn connect_to_hyperwhisper_server(api_key: &str, sample_rate: u32, server_url: &str, use_https: bool) -> Result<WsStream, String> {
+fn connect_to_hyperwhisper_server(
+    api_key: &str,
+    sample_rate: u32,
+    server_url: &str,
+    use_https: bool,
+) -> Result<WsStream, String> {
     let protocol = if use_https { "wss" } else { "ws" };
     let url_str = format!(
         "{}://{}/api/v1/deepgram/listen?model=nova-3&smart_format=true&interim_results=true&encoding=linear16&sample_rate={}&channels=1",
@@ -1462,12 +1579,16 @@ fn connect_to_hyperwhisper_server(api_key: &str, sample_rate: u32, server_url: &
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+            .header(
+                "Sec-WebSocket-Key",
+                tungstenite::handshake::client::generate_key(),
+            )
             .body(())
             .map_err(|e| format!("Failed to build request: {}", e))?;
 
-        let (ws, _response) = tungstenite::client::client(request, MaybeTlsStream::NativeTls(tls_stream))
-            .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
+        let (ws, _response) =
+            tungstenite::client::client(request, MaybeTlsStream::NativeTls(tls_stream))
+                .map_err(|e| format!("WebSocket handshake failed: {}", e))?;
 
         Ok(WsStream::Tls(ws))
     } else {
@@ -1482,7 +1603,10 @@ fn connect_to_hyperwhisper_server(api_key: &str, sample_rate: u32, server_url: &
             .header("Connection", "Upgrade")
             .header("Upgrade", "websocket")
             .header("Sec-WebSocket-Version", "13")
-            .header("Sec-WebSocket-Key", tungstenite::handshake::client::generate_key())
+            .header(
+                "Sec-WebSocket-Key",
+                tungstenite::handshake::client::generate_key(),
+            )
             .body(())
             .map_err(|e| format!("Failed to build request: {}", e))?;
 
@@ -1526,7 +1650,7 @@ fn set_hyperwhisper_server_settings(
     *state.hyperwhisper_server_https.lock().unwrap() = use_https;
 
     // If using hyperwhisper server and no API key provided, auto-provision a trial key
-    if use_hyperwhisper_server && api_key.as_ref().map_or(true, |k| k.trim().is_empty()) {
+    if use_hyperwhisper_server && api_key.as_ref().is_none_or(|k| k.trim().is_empty()) {
         match provision_trial_key_internal(&server_url_final, use_https) {
             Ok(response) => {
                 if let Some(ref key) = response.key {
@@ -1582,6 +1706,8 @@ fn accessibility_granted() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
+// The return separates the macOS path from the Linux one below it.
+#[allow(clippy::needless_return)]
 fn type_text_internal(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Ok(());
@@ -1664,9 +1790,7 @@ fn type_text_internal(text: &str) -> Result<(), String> {
         }
 
         // Try wtype (Wayland - requires compositor support)
-        let wtype_result = std::process::Command::new("wtype")
-            .arg(text)
-            .status();
+        let wtype_result = std::process::Command::new("wtype").arg(text).status();
 
         if let Ok(status) = wtype_result {
             if status.success() {
@@ -1715,10 +1839,18 @@ async fn start_recording(
     let api_key = if use_local {
         String::new() // Local transcription doesn't need API key
     } else if use_hyperwhisper {
-        state.hyperwhisper_api_key.lock().unwrap().clone()
+        state
+            .hyperwhisper_api_key
+            .lock()
+            .unwrap()
+            .clone()
             .ok_or_else(|| "Hyperwhisper API key not set".to_string())?
     } else {
-        state.api_key.lock().unwrap().clone()
+        state
+            .api_key
+            .lock()
+            .unwrap()
+            .clone()
             .ok_or_else(|| "Deepgram API key not set".to_string())?
     };
 
@@ -1729,10 +1861,15 @@ async fn start_recording(
             .lock()
             .unwrap()
             .clone()
-            .ok_or_else(|| "No local model selected. Please select a model in settings.".to_string())?;
+            .ok_or_else(|| {
+                "No local model selected. Please select a model in settings.".to_string()
+            })?;
 
         if !state.model_manager.is_model_downloaded(&model_id) {
-            return Err(format!("Model {} is not downloaded. Please download it first.", model_id));
+            return Err(format!(
+                "Model {} is not downloaded. Please download it first.",
+                model_id
+            ));
         }
 
         Some(model_id)
@@ -1799,19 +1936,24 @@ async fn start_recording(
 
         thread::spawn(move || {
             // Helper to stop recording on error
-            let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
-                *is_recording.lock().unwrap() = false;
-                if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
-                    let _ = stop_tx.send(());
-                }
-            };
+            let stop_recording_on_error =
+                |is_recording: &Arc<Mutex<bool>>,
+                 stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
+                    *is_recording.lock().unwrap() = false;
+                    if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
+                        let _ = stop_tx.send(());
+                    }
+                };
 
             // Load the model if not already loaded
             {
                 let mut manager = match transcription_manager.lock() {
                     Ok(m) => m,
                     Err(e) => {
-                        let _ = app_handle_ws.emit("transcription-error", format!("Failed to access transcription engine: {}", e));
+                        let _ = app_handle_ws.emit(
+                            "transcription-error",
+                            format!("Failed to access transcription engine: {}", e),
+                        );
                         stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                         return;
                     }
@@ -1820,7 +1962,10 @@ async fn start_recording(
                 let currently_loaded = manager.get_loaded_model_id().map(|s| s.to_string());
                 if currently_loaded.as_deref() != Some(&model_id) {
                     if let Err(e) = manager.load_model(&model_id) {
-                        let _ = app_handle_ws.emit("transcription-error", format!("Failed to load model: {}", e));
+                        let _ = app_handle_ws.emit(
+                            "transcription-error",
+                            format!("Failed to load model: {}", e),
+                        );
                         stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                         return;
                     }
@@ -1831,7 +1976,10 @@ async fn start_recording(
             let mut resampler = match AudioResampler::new(sample_rate) {
                 Ok(r) => r,
                 Err(e) => {
-                    let _ = app_handle_ws.emit("transcription-error", format!("Failed to create resampler: {}", e));
+                    let _ = app_handle_ws.emit(
+                        "transcription-error",
+                        format!("Failed to create resampler: {}", e),
+                    );
                     stop_recording_on_error(&is_recording_ws, &stop_signal_ws);
                     return;
                 }
@@ -1927,7 +2075,7 @@ async fn start_recording(
                 // it invents sentences, sometimes in a language nobody spoke,
                 // and auto-type puts them straight into whatever app is in
                 // front. So silence never reaches the model.
-                if level_before < MIN_SPEECH_LEVEL || peak < MIN_SPEECH_PEAK {
+                if !holds_speech(level_before, peak) {
                     eprintln!(
                         "dictation: skipped {:.1}s, no speech in it (speech={:.4} peak={:.3})",
                         audio_seconds, level_before, peak
@@ -1969,14 +2117,25 @@ async fn start_recording(
                 let saved_input = save_model_input(&all_audio);
 
                 let started = std::time::Instant::now();
-                let (result, model_id) = {
-                    let mut manager = transcription_manager.lock().unwrap();
-                    let id = manager
-                        .get_loaded_model_id()
-                        .unwrap_or("none")
-                        .to_string();
-                    let r = manager.transcribe(&all_audio, transcription_language.clone());
-                    (r, id)
+                // Panicking here would skip "transcription-complete" and hang both windows.
+                let (result, model_id) = match transcription_manager.lock() {
+                    Ok(mut manager) => {
+                        let id = manager.get_loaded_model_id().unwrap_or("none").to_string();
+                        let r = manager.transcribe(&all_audio, transcription_language.clone());
+                        (r, id)
+                    }
+                    Err(e) => {
+                        let _ = app_handle_ws.emit(
+                            "transcription-error",
+                            format!(
+                                "The transcription engine is in a broken state after an earlier \
+                                 failure ({}). Restart Omegawhisper.",
+                                e
+                            ),
+                        );
+                        let _ = app_handle_ws.emit("transcription-complete", ());
+                        return;
+                    }
                 };
                 let took = started.elapsed().as_secs_f32();
 
@@ -1994,7 +2153,10 @@ async fn start_recording(
                         level_after,
                         gain,
                         took,
-                        chars: result.as_ref().map(|t| t.trim().chars().count()).unwrap_or(0),
+                        chars: result
+                            .as_ref()
+                            .map(|t| t.trim().chars().count())
+                            .unwrap_or(0),
                     },
                 );
 
@@ -2047,7 +2209,11 @@ async fn start_recording(
                         }
                         if !text.is_empty() {
                             if auto_type {
-                                eprintln!("Auto-typing {} characters: {:?}", text.chars().count(), text);
+                                eprintln!(
+                                    "Auto-typing {} characters: {:?}",
+                                    text.chars().count(),
+                                    text
+                                );
                                 if let Err(e) = type_text_internal(&format!("{} ", text)) {
                                     eprintln!("Auto-type failed: {}", e);
                                     // Typing was refused, so hand the text to
@@ -2082,16 +2248,23 @@ async fn start_recording(
         // Spawn WebSocket thread for Deepgram or Hyperwhisper server
         thread::spawn(move || {
             // Helper to stop recording on error
-            let stop_recording_on_error = |is_recording: &Arc<Mutex<bool>>, stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
-                *is_recording.lock().unwrap() = false;
-                if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
-                    let _ = stop_tx.send(());
-                }
-            };
+            let stop_recording_on_error =
+                |is_recording: &Arc<Mutex<bool>>,
+                 stop_signal: &Arc<Mutex<Option<std::sync::mpsc::Sender<()>>>>| {
+                    *is_recording.lock().unwrap() = false;
+                    if let Some(stop_tx) = stop_signal.lock().unwrap().take() {
+                        let _ = stop_tx.send(());
+                    }
+                };
 
             // Connect to Hyperwhisper server or Deepgram
             let mut ws = if use_hyperwhisper {
-                match connect_to_hyperwhisper_server(&api_key, sample_rate, &hyperwhisper_url, hyperwhisper_https) {
+                match connect_to_hyperwhisper_server(
+                    &api_key,
+                    sample_rate,
+                    &hyperwhisper_url,
+                    hyperwhisper_https,
+                ) {
                     Ok(ws) => ws,
                     Err(e) => {
                         eprintln!("Failed to connect to Hyperwhisper server: {}", e);
@@ -2116,115 +2289,114 @@ async fn start_recording(
             let _ = ws.set_read_timeout(Some(Duration::from_millis(50)));
 
             // Helper closure to process incoming Deepgram messages
-            let process_message = |ws: &mut WsStream, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
-                match ws.read() {
-                    Ok(Message::Text(text)) => {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                            if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
-                                let transcript = json
-                                    .get("channel")
-                                    .and_then(|c| c.get("alternatives"))
-                                    .and_then(|a| a.get(0))
-                                    .and_then(|a| a.get("transcript"))
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or("");
+            let process_message =
+                |ws: &mut WsStream, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
+                    match ws.read() {
+                        Ok(Message::Text(text)) => {
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                                if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
+                                    let transcript = json
+                                        .get("channel")
+                                        .and_then(|c| c.get("alternatives"))
+                                        .and_then(|a| a.get(0))
+                                        .and_then(|a| a.get("transcript"))
+                                        .and_then(|t| t.as_str())
+                                        .unwrap_or("");
 
-                                let is_final = json
-                                    .get("is_final")
-                                    .and_then(|f| f.as_bool())
-                                    .unwrap_or(false);
+                                    let is_final = json
+                                        .get("is_final")
+                                        .and_then(|f| f.as_bool())
+                                        .unwrap_or(false);
 
-                                if !transcript.is_empty() {
-                                    // Type final transcriptions in real-time if enabled
-                                    if is_final && auto_type {
-                                        // Add a space before the text (except potentially first word)
-                                        let text_to_type = format!("{} ", transcript);
-                                        eprintln!(
-                                            "Auto-typing {} characters: {:?}",
-                                            transcript.chars().count(),
-                                            transcript
-                                        );
-                                        if let Err(e) = type_text_internal(&text_to_type) {
-                                            eprintln!("Auto-type failed: {}", e);
+                                    if !transcript.is_empty() {
+                                        // Type final transcriptions in real-time if enabled
+                                        if is_final && auto_type {
+                                            // Add a space before the text (except potentially first word)
+                                            let text_to_type = format!("{} ", transcript);
+                                            eprintln!(
+                                                "Auto-typing {} characters: {:?}",
+                                                transcript.chars().count(),
+                                                transcript
+                                            );
+                                            if let Err(e) = type_text_internal(&text_to_type) {
+                                                eprintln!("Auto-type failed: {}", e);
+                                            }
                                         }
-                                    }
 
-                                    let event = TranscriptionEvent {
-                                        text: transcript.to_string(),
-                                        is_final,
-                                    };
-                                    let _ = app_handle.emit("transcription", event);
+                                        let event = TranscriptionEvent {
+                                            text: transcript.to_string(),
+                                            is_final,
+                                        };
+                                        let _ = app_handle.emit("transcription", event);
+                                    }
+                                }
+                            }
+                            Some(true) // Continue
+                        }
+                        Ok(Message::Close(_)) => {
+                            Some(false) // Stop
+                        }
+                        Err(tungstenite::Error::Io(ref e))
+                            if e.kind() == std::io::ErrorKind::WouldBlock
+                                || e.kind() == std::io::ErrorKind::TimedOut =>
+                        {
+                            None // Timeout, no message
+                        }
+                        Err(_) => {
+                            Some(false) // Error, stop
+                        }
+                        _ => Some(true),
+                    }
+                };
+
+            loop {
+                // Check if we should stop
+                if !*is_recording_ws.lock().unwrap() {
+                    // Send CloseStream to Deepgram to signal end of audio
+                    let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
+
+                    // Notify frontend that we're processing remaining transcriptions
+                    let _ = app_handle_ws.emit("transcription-processing", ());
+
+                    // Keep reading for pending transcription results (up to 5 seconds)
+                    let drain_start = std::time::Instant::now();
+                    while drain_start.elapsed() < Duration::from_secs(5) {
+                        match process_message(&mut ws, &app_handle_ws, auto_type) {
+                            Some(false) => break, // Close or error
+                            Some(true) => {}      // Got a message, keep reading
+                            None => {
+                                // Timeout with no message - if we've waited at least 1 second, we're done
+                                if drain_start.elapsed() > Duration::from_millis(1000) {
+                                    break;
                                 }
                             }
                         }
-                        Some(true) // Continue
                     }
-                    Ok(Message::Close(_)) => {
-                        Some(false) // Stop
-                    }
-                    Err(tungstenite::Error::Io(ref e))
-                        if e.kind() == std::io::ErrorKind::WouldBlock
-                        || e.kind() == std::io::ErrorKind::TimedOut => {
-                        None // Timeout, no message
-                    }
-                    Err(_) => {
-                        Some(false) // Error, stop
-                    }
-                    _ => Some(true)
+
+                    let _ = ws.close(None);
+
+                    // Notify frontend that transcription processing is complete
+                    let _ = app_handle_ws.emit("transcription-complete", ());
+
+                    break;
                 }
-            };
 
-        loop {
-            // Check if we should stop
-            if !*is_recording_ws.lock().unwrap() {
-                // Send CloseStream to Deepgram to signal end of audio
-                let _ = ws.send(Message::Text("{\"type\":\"CloseStream\"}".to_string()));
-
-                // Notify frontend that we're processing remaining transcriptions
-                let _ = app_handle_ws.emit("transcription-processing", ());
-
-                // Keep reading for pending transcription results (up to 5 seconds)
-                let drain_start = std::time::Instant::now();
-                while drain_start.elapsed() < Duration::from_secs(5) {
-                    match process_message(&mut ws, &app_handle_ws, auto_type) {
-                        Some(false) => break, // Close or error
-                        Some(true) => {}, // Got a message, keep reading
-                        None => {
-                            // Timeout with no message - if we've waited at least 1 second, we're done
-                            if drain_start.elapsed() > Duration::from_millis(1000) {
-                                break;
-                            }
-                        }
+                // Send any pending audio data
+                while let Ok(samples) = audio_rx.try_recv() {
+                    let pcm_data = samples_to_linear16(&samples);
+                    if let Err(e) = ws.send(Message::Binary(pcm_data)) {
+                        eprintln!("Failed to send audio: {}", e);
+                        return;
                     }
                 }
 
-                let _ = ws.close(None);
-
-                // Notify frontend that transcription processing is complete
-                let _ = app_handle_ws.emit("transcription-complete", ());
-
-                break;
-            }
-
-            // Send any pending audio data
-            while let Ok(samples) = audio_rx.try_recv() {
-                let pcm_data = samples_to_linear16(&samples);
-                if let Err(e) = ws.send(Message::Binary(pcm_data)) {
-                    eprintln!("Failed to send audio: {}", e);
-                    return;
-                }
-            }
-
-            // Try to read messages from Deepgram (with timeout)
-            match process_message(&mut ws, &app_handle_ws, auto_type) {
-                Some(false) => {
+                // Try to read messages from Deepgram (with timeout)
+                if let Some(false) = process_message(&mut ws, &app_handle_ws, auto_type) {
                     // Connection closed or error - still emit complete event
                     let _ = app_handle_ws.emit("transcription-complete", ());
                     break;
                 }
-                _ => {}
             }
-        }
         });
     } // End of if use_local else block
 
@@ -2257,7 +2429,7 @@ async fn start_recording(
                 let bands = frequency_bands(&recent, &fft);
                 // Pitch costs more than the rest put together, so it runs 5
                 // times a second rather than 20.
-                if tick % 4 == 0 {
+                if tick.is_multiple_of(4) {
                     pitch = detect_pitch(&recent, sample_rate);
                 }
                 tick += 1;
@@ -2279,104 +2451,20 @@ async fn start_recording(
 
     // Spawn audio recording thread
     thread::spawn(move || {
+        let targets = CaptureTargets {
+            is_recording: is_recording_arc.clone(),
+            recorded_samples: recorded_samples_arc.clone(),
+            mic_level: mic_level.clone(),
+            mic_recent: mic_recent.clone(),
+            audio_tx: audio_tx.clone(),
+            channels,
+        };
         let stream_result = match sample_format {
-            SampleFormat::F32 => {
-                let is_recording = is_recording_arc.clone();
-                let recorded_samples = recorded_samples_arc.clone();
-                let audio_tx = audio_tx.clone();
-                let mic_level = mic_level.clone();
-                let mic_recent = mic_recent.clone();
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if *is_recording.lock().unwrap() {
-                            let mut buffer = data.to_vec();
-                            // Convert to mono if stereo
-                            if channels > 1 {
-                                let mut mono_data = Vec::new();
-                                for chunk in buffer.chunks(channels as usize) {
-                                    let avg: f32 = chunk.iter().sum::<f32>() / chunk.len() as f32;
-                                    mono_data.push(avg);
-                                }
-                                buffer = mono_data;
-                            }
-                            // Store for WAV file
-                            recorded_samples.lock().unwrap().extend_from_slice(&buffer);
-                            *mic_level.lock().unwrap() = chunk_level(&buffer);
-                            keep_recent(&mic_recent, &buffer);
-                            // Send to WebSocket thread
-                            let _ = audio_tx.send(buffer);
-                        }
-                    },
-                    move |err| {
-                        eprintln!("Error in audio stream: {}", err);
-                    },
-                    None,
-                )
-            }
-            SampleFormat::I16 => {
-                let is_recording = is_recording_arc.clone();
-                let recorded_samples = recorded_samples_arc.clone();
-                let audio_tx = audio_tx.clone();
-                let mic_level = mic_level.clone();
-                let mic_recent = mic_recent.clone();
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if *is_recording.lock().unwrap() {
-                            let mut buffer: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
-                            if channels > 1 {
-                                let mut mono_data = Vec::new();
-                                for chunk in buffer.chunks(channels as usize) {
-                                    let avg: f32 = chunk.iter().sum::<f32>() / chunk.len() as f32;
-                                    mono_data.push(avg);
-                                }
-                                buffer = mono_data;
-                            }
-                            recorded_samples.lock().unwrap().extend_from_slice(&buffer);
-                            *mic_level.lock().unwrap() = chunk_level(&buffer);
-                            keep_recent(&mic_recent, &buffer);
-                            let _ = audio_tx.send(buffer);
-                        }
-                    },
-                    move |err| {
-                        eprintln!("Error in audio stream: {}", err);
-                    },
-                    None,
-                )
-            }
-            SampleFormat::U16 => {
-                let is_recording = is_recording_arc.clone();
-                let recorded_samples = recorded_samples_arc.clone();
-                let audio_tx = audio_tx.clone();
-                let mic_level = mic_level.clone();
-                let mic_recent = mic_recent.clone();
-                device.build_input_stream(
-                    &stream_config,
-                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        if *is_recording.lock().unwrap() {
-                            let mut buffer: Vec<f32> = data.iter().map(|&s| (s as f32 / u16::MAX as f32) * 2.0 - 1.0).collect();
-                            if channels > 1 {
-                                let mut mono_data = Vec::new();
-                                for chunk in buffer.chunks(channels as usize) {
-                                    let avg: f32 = chunk.iter().sum::<f32>() / chunk.len() as f32;
-                                    mono_data.push(avg);
-                                }
-                                buffer = mono_data;
-                            }
-                            recorded_samples.lock().unwrap().extend_from_slice(&buffer);
-                            *mic_level.lock().unwrap() = chunk_level(&buffer);
-                            keep_recent(&mic_recent, &buffer);
-                            let _ = audio_tx.send(buffer);
-                        }
-                    },
-                    move |err| {
-                        eprintln!("Error in audio stream: {}", err);
-                    },
-                    None,
-                )
-            }
+            SampleFormat::F32 => build_capture_stream(&device, &stream_config, targets, |s: f32| s),
+            SampleFormat::I16 => build_capture_stream(&device, &stream_config, targets, i16_to_f32),
+            SampleFormat::U16 => build_capture_stream(&device, &stream_config, targets, u16_to_f32),
             _ => {
+                eprintln!("Unsupported microphone sample format: {:?}", sample_format);
                 return;
             }
         };
@@ -2402,7 +2490,10 @@ async fn start_recording(
 }
 
 #[tauri::command]
-async fn stop_recording(state: State<'_, AudioState>, _app_handle: AppHandle) -> Result<String, String> {
+async fn stop_recording(
+    state: State<'_, AudioState>,
+    _app_handle: AppHandle,
+) -> Result<String, String> {
     {
         let is_recording = state.is_recording.lock().unwrap();
         if !*is_recording {
@@ -2421,8 +2512,8 @@ async fn stop_recording(state: State<'_, AudioState>, _app_handle: AppHandle) ->
         let _ = stop_tx.send(());
     }
 
-    // Wait for buffers to flush
-    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Wait for buffers to flush. Awaited, not slept: this runs on the shared runtime.
+    tokio::time::sleep(Duration::from_millis(300)).await;
 
     // Get recorded samples
     let samples = state.recorded_samples.lock().unwrap().clone();
@@ -2440,8 +2531,7 @@ async fn stop_recording(state: State<'_, AudioState>, _app_handle: AppHandle) ->
     let file_name = format!("{}.wav", timestamp);
     let file_path = recordings_dir.join(&file_name);
 
-    fs::write(&file_path, &wav_bytes)
-        .map_err(|e| format!("Failed to save recording: {}", e))?;
+    fs::write(&file_path, &wav_bytes).map_err(|e| format!("Failed to save recording: {}", e))?;
 
     // Encode as base64
     use base64::Engine;
@@ -2476,10 +2566,7 @@ fn get_keybinding() -> Option<String> {
     use std::process::Command;
 
     // Run dconf dump / to get all settings
-    let output = Command::new("dconf")
-        .args(["dump", "/"])
-        .output()
-        .ok()?;
+    let output = Command::new("dconf").args(["dump", "/"]).output().ok()?;
 
     if !output.status.success() {
         return None;
@@ -2525,10 +2612,10 @@ fn get_keybinding() -> Option<String> {
     // Find sections that contain omegawhisper in any line
     for (section_name, lines) in &sections {
         let section_text = lines.join("\n");
-        let has_pattern = search_patterns.iter().any(|p|
-            section_name.to_lowercase().contains(&p.to_lowercase()) ||
-            section_text.to_lowercase().contains(&p.to_lowercase())
-        );
+        let has_pattern = search_patterns.iter().any(|p| {
+            section_name.to_lowercase().contains(&p.to_lowercase())
+                || section_text.to_lowercase().contains(&p.to_lowercase())
+        });
 
         if has_pattern {
             // Look for binding= in this section
@@ -2551,7 +2638,6 @@ fn get_keybinding() -> Option<String> {
     None
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 // Everything the app prints goes to one file, whatever started it - Finder,
 // the tray, or a terminal. Launched from Finder there is no terminal to print
 // to, so a dictation that went wrong used to leave no trace at all.
@@ -2566,7 +2652,10 @@ fn redirect_output_to_log() {
     }
 
     // Start over once the file gets big rather than growing without end.
-    if fs::metadata(&path).map(|m| m.len() > 5_000_000).unwrap_or(false) {
+    if fs::metadata(&path)
+        .map(|m| m.len() > 5_000_000)
+        .unwrap_or(false)
+    {
         let _ = fs::remove_file(&path);
     }
 
@@ -2582,9 +2671,13 @@ fn redirect_output_to_log() {
     // point at it and closing it here would close them too.
     std::mem::forget(file);
 
-    eprintln!("\n===== started {} =====", Local::now().format("%F %H:%M:%S"));
+    eprintln!(
+        "\n===== started {} =====",
+        Local::now().format("%F %H:%M:%S")
+    );
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(unix)]
     redirect_output_to_log();
@@ -2653,9 +2746,7 @@ pub fn run() {
     let saved_prefs = load_tray_prefs();
 
     // Initialize model manager
-    let model_manager = Arc::new(
-        ModelManager::new().expect("Failed to initialize model manager")
-    );
+    let model_manager = Arc::new(ModelManager::new().expect("Failed to initialize model manager"));
 
     // Initialize transcription manager
     let transcription_manager = SharedTranscriptionManager::new(model_manager.clone());
@@ -2740,7 +2831,10 @@ pub fn run() {
             #[cfg(desktop)]
             {
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
-                if let Err(e) = app.global_shortcut().register(Shortcut::new(None, Code::F3)) {
+                if let Err(e) = app
+                    .global_shortcut()
+                    .register(Shortcut::new(None, Code::F3))
+                {
                     eprintln!("Failed to register F3 shortcut: {}", e);
                 }
             }
@@ -2752,16 +2846,31 @@ pub fn run() {
                 use tauri::tray::TrayIconBuilder;
                 use tauri::Manager;
 
-                let open_item =
-                    MenuItem::with_id(app, "open_settings", "Open Omegawhisper", true, None::<&str>)?;
-                let settings_item =
-                    MenuItem::with_id(app, "open_settings_window", "Settings...", true, None::<&str>)?;
+                let open_item = MenuItem::with_id(
+                    app,
+                    "open_settings",
+                    "Open Omegawhisper",
+                    true,
+                    None::<&str>,
+                )?;
+                let settings_item = MenuItem::with_id(
+                    app,
+                    "open_settings_window",
+                    "Settings...",
+                    true,
+                    None::<&str>,
+                )?;
                 let hide_item =
                     MenuItem::with_id(app, "hide_window", "Hide window", true, None::<&str>)?;
 
                 // Language submenu (affects local Whisper transcription only).
                 // Tick whatever was chosen last time, not always Auto-detect.
-                let saved_language = app.state::<AudioState>().transcription_language.lock().unwrap().clone();
+                let saved_language = app
+                    .state::<AudioState>()
+                    .transcription_language
+                    .lock()
+                    .unwrap()
+                    .clone();
                 let lang_auto = CheckMenuItem::with_id(
                     app,
                     "lang_auto",
@@ -3013,4 +3122,718 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// Tests. Plain maths on lists of numbers: no microphone, no model, no windows.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn near(got: f32, want: f32, tolerance: f32, what: &str) {
+        assert!(
+            (got - want).abs() <= tolerance,
+            "{what}: got {got}, wanted {want} (allowed {tolerance})"
+        );
+    }
+
+    // Blocks of 480 samples (30 ms at 16 kHz), alternating +/- amplitude so the
+    // measured loudness is exactly that amplitude.
+    fn blocks(spec: &[(usize, f32)]) -> Vec<f32> {
+        let mut out = Vec::new();
+        for &(count, amplitude) in spec {
+            for _ in 0..count {
+                for i in 0..480 {
+                    out.push(if i % 2 == 0 { amplitude } else { -amplitude });
+                }
+            }
+        }
+        out
+    }
+
+    fn sine(count: usize, hz: f32, sample_rate: f32, amplitude: f32) -> Vec<f32> {
+        (0..count)
+            .map(|i| (2.0 * std::f32::consts::PI * hz * i as f32 / sample_rate).sin() * amplitude)
+            .collect()
+    }
+
+    // Repeatable stand-in for noise, so a failure can be reproduced.
+    fn noise(count: usize, amplitude: f32) -> Vec<f32> {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        (0..count)
+            .map(|_| {
+                state = state
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                let unit = (state >> 32) as f32 / u32::MAX as f32;
+                (unit * 2.0 - 1.0) * amplitude
+            })
+            .collect()
+    }
+
+    fn peak_of(samples: &[f32]) -> f32 {
+        samples.iter().fold(0.0f32, |max, s| max.max(s.abs()))
+    }
+
+    // ---- turning what the device sends into numbers between -1 and 1 -------
+
+    #[test]
+    fn sixteen_bit_signed_samples_convert() {
+        // (raw value from the device, expected, what this case is for)
+        let cases: &[(i16, f32, &str)] = &[
+            (0, 0.0, "silence sits at zero"),
+            (i16::MAX, 1.0, "the loudest positive value reaches 1.0"),
+            (-i16::MAX, -1.0, "the loudest negative value reaches -1.0"),
+            (16383, 0.5, "half loudness"),
+            (-16383, -0.5, "half loudness, negative"),
+        ];
+        for &(raw, want, what) in cases {
+            near(i16_to_f32(raw), want, 0.0001, what);
+        }
+        // One value below the loudest negative. It is allowed to land slightly
+        // past -1.0; the check that follows every boost keeps it in range.
+        assert!(i16_to_f32(i16::MIN) >= -1.001);
+    }
+
+    #[test]
+    fn sixteen_bit_unsigned_samples_convert() {
+        let cases: &[(u16, f32, &str)] = &[
+            (32768, 0.0, "silence sits in the middle, not at zero"),
+            (0, -1.0, "the bottom of the range is the loudest negative"),
+            (
+                u16::MAX,
+                1.0,
+                "the top of the range is the loudest positive",
+            ),
+            (49151, 0.5, "half loudness"),
+            (16384, -0.5, "half loudness, negative"),
+        ];
+        for &(raw, want, what) in cases {
+            near(u16_to_f32(raw), want, 0.0001, what);
+        }
+    }
+
+    #[test]
+    fn silence_from_an_unsigned_device_stays_silent() {
+        // Scaling without shifting would turn a silent room into a steady tone.
+        let quiet: Vec<f32> = vec![32768u16; 4800].into_iter().map(u16_to_f32).collect();
+        near(peak_of(&quiet), 0.0, 0.0001, "silence must stay silent");
+        assert!(!holds_speech(speech_level(&quiet), peak_of(&quiet)));
+    }
+
+    // ---- mixing several channels down to one ------------------------------
+
+    #[test]
+    fn channels_are_averaged_into_one() {
+        // (channels, what the device sent, what should come out, why)
+        let cases: &[(u16, &[f32], &[f32], &str)] = &[
+            (
+                1,
+                &[0.1, 0.2, 0.3],
+                &[0.1, 0.2, 0.3],
+                "one channel passes through",
+            ),
+            (
+                0,
+                &[0.1, 0.2],
+                &[0.1, 0.2],
+                "a nonsense channel count changes nothing",
+            ),
+            (
+                2,
+                &[1.0, 0.0, 0.5, 0.5],
+                &[0.5, 0.5],
+                "two channels are averaged",
+            ),
+            (
+                2,
+                &[1.0, -1.0],
+                &[0.0],
+                "opposite channels cancel, they are not just dropped",
+            ),
+            (3, &[0.3, 0.6, 0.9], &[0.6], "three channels are averaged"),
+            (
+                2,
+                &[1.0, 0.0, 1.0],
+                &[0.5, 1.0],
+                "a half-finished frame at the end is kept",
+            ),
+            (2, &[], &[], "nothing in, nothing out"),
+        ];
+        for &(channels, input, want, what) in cases {
+            let got = mix_to_mono(input.to_vec(), channels);
+            assert_eq!(got.len(), want.len(), "{what}: wrong length");
+            for (i, (&g, &w)) in got.iter().zip(want.iter()).enumerate() {
+                near(g, w, 0.0001, &format!("{what}, sample {i}"));
+            }
+        }
+    }
+
+    // ---- how loud is the speech -------------------------------------------
+
+    #[test]
+    fn speech_loudness_ignores_pauses_and_single_bangs() {
+        // (recording, expected loudness, why this case exists)
+        let cases: &[(Vec<f32>, f32, &str)] = &[
+            (Vec::new(), 0.0, "nothing recorded"),
+            (vec![0.5; 100], 0.0, "shorter than one 30 ms block"),
+            (
+                blocks(&[(1, 0.3)]),
+                0.3,
+                "exactly one block reports its own loudness",
+            ),
+            (
+                blocks(&[(50, 0.08)]),
+                0.08,
+                "steady speech reports its loudness",
+            ),
+            (
+                blocks(&[(99, 0.002), (1, 0.9)]),
+                0.002,
+                "one door slam in a quiet minute does not count as speech",
+            ),
+            (
+                blocks(&[(80, 0.002), (20, 0.08)]),
+                0.08,
+                "real speech among pauses does count",
+            ),
+        ];
+        for (recording, want, what) in cases {
+            near(speech_level(recording), *want, 0.0001, what);
+        }
+    }
+
+    #[test]
+    fn a_single_block_does_not_wrap_to_the_quietest_one() {
+        near(
+            speech_level(&blocks(&[(1, 0.42)])),
+            0.42,
+            0.0001,
+            "one block",
+        );
+    }
+
+    // ---- the rule that silence must never reach the model -----------------
+
+    #[test]
+    fn only_real_speech_is_sent_to_the_model() {
+        // (speech loudness, loudest sample, may it be sent, why)
+        let cases: &[(f32, f32, bool, &str)] = &[
+            (0.0, 0.0, false, "digital silence"),
+            (
+                0.0014,
+                0.02,
+                false,
+                "an empty room, as measured on this Mac",
+            ),
+            (
+                0.004,
+                0.60,
+                false,
+                "one click: loud peak, but nothing is being said",
+            ),
+            (0.08, 0.02, false, "a steady hum: high average, no peaks"),
+            (0.005, 0.05, true, "exactly on both thresholds"),
+            (0.08, 0.50, true, "normal speech close to the microphone"),
+            (0.30, 0.99, true, "loud speech"),
+        ];
+        for &(level, peak, want, what) in cases {
+            assert_eq!(holds_speech(level, peak), want, "{what}");
+        }
+    }
+
+    // ---- raising the level of a quiet recording ---------------------------
+
+    #[test]
+    fn quiet_recordings_are_raised_but_an_empty_room_is_not() {
+        // (recording, expected gain, why)
+        // A gain of 1.0 means the recording was left exactly as it was.
+        let cases: &[(Vec<f32>, f32, &str)] = &[
+            (Vec::new(), 1.0, "nothing recorded"),
+            (blocks(&[(10, 0.0)]), 1.0, "digital silence is never raised"),
+            (
+                blocks(&[(10, 0.002)]),
+                1.0,
+                "an empty room stays quiet - raising it is how invented sentences got typed",
+            ),
+            (
+                blocks(&[(10, 0.02)]),
+                4.0,
+                "quiet speech is brought up to normal",
+            ),
+            (
+                blocks(&[(10, 0.006)]),
+                10.0,
+                "very quiet speech stops at ten times",
+            ),
+            (
+                blocks(&[(10, 0.2)]),
+                1.0,
+                "speech that is already loud is left alone",
+            ),
+        ];
+        for (recording, want, what) in cases {
+            let mut audio = recording.clone();
+            near(boost_quiet_audio(&mut audio), *want, 0.01, what);
+        }
+    }
+
+    #[test]
+    fn raising_the_level_never_pushes_a_sample_past_the_limit() {
+        let recordings: &[(Vec<f32>, &str)] = &[
+            (blocks(&[(10, 0.006)]), "very quiet speech"),
+            (blocks(&[(10, 0.02)]), "quiet speech"),
+            (
+                blocks(&[(99, 0.006), (1, 0.9)]),
+                "quiet speech with one loud bang in it",
+            ),
+            (sine(48_000, 220.0, 16_000.0, 0.01), "a quiet steady tone"),
+            (noise(48_000, 0.01), "quiet noise"),
+        ];
+        for (recording, what) in recordings {
+            let mut audio = recording.clone();
+            boost_quiet_audio(&mut audio);
+            let peak = peak_of(&audio);
+            assert!(peak <= 1.0, "{what}: loudest sample reached {peak}");
+        }
+    }
+
+    #[test]
+    fn the_level_after_raising_matches_the_gain_reported() {
+        let mut audio = blocks(&[(10, 0.02)]);
+        let before = speech_level(&audio);
+        let gain = boost_quiet_audio(&mut audio);
+        let after = speech_level(&audio);
+        near(
+            after,
+            before * gain,
+            0.001,
+            "reported gain matches the result",
+        );
+        near(
+            after,
+            0.08,
+            0.001,
+            "quiet speech ends up at normal speech loudness",
+        );
+    }
+
+    // ---- cutting the quiet start and end off ------------------------------
+
+    #[test]
+    fn only_the_quiet_start_and_end_are_cut() {
+        // 40 blocks of silence, 40 of speech, 40 of silence.
+        let mut audio = blocks(&[(40, 0.0), (40, 0.1), (40, 0.0)]);
+        let speech_samples_before = audio.iter().filter(|s| s.abs() > 0.05).count();
+
+        let cut = trim_quiet_edges(&mut audio);
+
+        near(cut, 0.72, 0.01, "seconds removed from the front");
+        assert_eq!(audio.len(), 34_560, "length after trimming");
+        assert_eq!(
+            audio.iter().filter(|s| s.abs() > 0.05).count(),
+            speech_samples_before,
+            "every spoken sample survived the trim"
+        );
+    }
+
+    #[test]
+    fn a_pause_in_the_middle_of_a_sentence_is_never_cut() {
+        // Cutting here would join words that were seconds apart.
+        let mut audio = blocks(&[(20, 0.1), (40, 0.0), (20, 0.1)]);
+        let length_before = audio.len();
+
+        let cut = trim_quiet_edges(&mut audio);
+
+        near(cut, 0.0, 0.0001, "nothing cut from the front");
+        assert_eq!(audio.len(), length_before, "nothing cut at all");
+        assert_eq!(
+            audio.iter().filter(|s| s.abs() < 0.05).count(),
+            40 * 480,
+            "the pause is still there, at its full length"
+        );
+    }
+
+    #[test]
+    fn trimming_leaves_a_recording_with_no_speech_alone() {
+        // (recording, why)
+        let cases: &[(Vec<f32>, &str)] = &[
+            (blocks(&[(20, 0.0)]), "digital silence"),
+            (blocks(&[(20, 0.002)]), "an empty room"),
+        ];
+        for (recording, what) in cases {
+            let mut audio = recording.clone();
+            let length_before = audio.len();
+            near(trim_quiet_edges(&mut audio), 0.0, 0.0001, what);
+            assert_eq!(audio.len(), length_before, "{what}: nothing should be cut");
+        }
+    }
+
+    #[test]
+    fn a_quiet_tail_is_cut_without_touching_the_front() {
+        let mut audio = blocks(&[(40, 0.1), (40, 0.0)]);
+        let cut = trim_quiet_edges(&mut audio);
+        near(cut, 0.0, 0.0001, "nothing cut from the front");
+        assert_eq!(audio.len(), 26_880, "the tail was cut");
+    }
+
+    // ---- the numbers shown while recording --------------------------------
+
+    #[test]
+    fn chunk_loudness_reports_peak_and_average() {
+        // (chunk, expected loudest, expected average, why)
+        let cases: &[(&[f32], f32, f32, &str)] = &[
+            (&[], 0.0, 0.0, "nothing recorded"),
+            (&[0.0; 8], 0.0, 0.0, "silence"),
+            (&[0.5, -0.5, 0.5, -0.5], 0.5, 0.5, "a steady tone"),
+            (&[1.0, 0.0, 0.0, 0.0], 1.0, 0.5, "one spike among silence"),
+            (
+                &[-0.8, 0.1],
+                0.8,
+                0.5701,
+                "the loudest sample can be negative",
+            ),
+        ];
+        for &(chunk, want_peak, want_rms, what) in cases {
+            let (peak, rms) = chunk_level(chunk);
+            near(peak, want_peak, 0.001, &format!("{what}: loudest"));
+            near(rms, want_rms, 0.001, &format!("{what}: average"));
+        }
+    }
+
+    #[test]
+    fn recording_statistics_report_how_much_was_near_silence() {
+        // (recording, loudest, average, share near silence, why)
+        let cases: &[(Vec<f32>, f32, f32, f32, &str)] = &[
+            (
+                Vec::new(),
+                0.0,
+                0.0,
+                1.0,
+                "nothing recorded counts as all silence",
+            ),
+            (vec![0.0; 100], 0.0, 0.0, 1.0, "silence"),
+            (vec![0.5; 100], 0.5, 0.5, 0.0, "a steady loud signal"),
+            (
+                [vec![0.5; 50], vec![0.001; 50]].concat(),
+                0.5,
+                0.3536,
+                0.5,
+                "half loud, half near silence",
+            ),
+        ];
+        for (recording, want_peak, want_rms, want_quiet, what) in cases {
+            let (peak, rms, quiet) = audio_stats(recording);
+            near(peak, *want_peak, 0.001, &format!("{what}: loudest"));
+            near(rms, *want_rms, 0.001, &format!("{what}: average"));
+            near(
+                quiet,
+                *want_quiet,
+                0.001,
+                &format!("{what}: share near silence"),
+            );
+        }
+    }
+
+    #[test]
+    fn the_recent_sample_store_keeps_the_newest_and_stays_bounded() {
+        let store = Arc::new(Mutex::new(Vec::<f32>::new()));
+
+        // Less than the cap: everything is kept.
+        keep_recent(&store, &[1.0, 2.0, 3.0]);
+        assert_eq!(store.lock().unwrap().len(), 3);
+
+        // Well past the cap, fed in pieces the way the microphone delivers it.
+        let total = 6000usize;
+        store.lock().unwrap().clear();
+        for start in (0..total).step_by(1000) {
+            let chunk: Vec<f32> = (start..start + 1000).map(|i| i as f32).collect();
+            keep_recent(&store, &chunk);
+        }
+        let kept = store.lock().unwrap().clone();
+        assert_eq!(kept.len(), 4096, "the store must not grow without limit");
+        near(kept[4095], 5999.0, 0.5, "the newest sample is kept");
+        near(
+            kept[0],
+            (total - 4096) as f32,
+            0.5,
+            "the oldest ones are dropped",
+        );
+    }
+
+    // ---- the bars and the pitch the windows draw --------------------------
+
+    #[test]
+    fn frequency_bands_stay_in_range_and_follow_the_tone() {
+        let mut planner = rustfft::FftPlanner::<f32>::new();
+        let fft = planner.plan_fft_forward(FFT_SIZE);
+
+        // Too short to measure: a full set of empty bars, not a crash.
+        let short = frequency_bands(&[0.1; 100], &fft);
+        assert_eq!(short.len(), BAND_COUNT);
+        assert!(
+            short.iter().all(|&b| b == 0.0),
+            "too-short input gives no bars"
+        );
+
+        // Silence: every bar empty.
+        let silent = frequency_bands(&vec![0.0; FFT_SIZE], &fft);
+        assert!(silent.iter().all(|&b| b == 0.0), "silence gives no bars");
+
+        // A single tone lights up one region, and no bar leaves the 0-to-1 range.
+        let tone = sine(FFT_SIZE, 440.0, 16_000.0, 0.5);
+        let bands = frequency_bands(&tone, &fft);
+        assert_eq!(bands.len(), BAND_COUNT);
+        assert!(
+            bands.iter().all(|&b| (0.0..=1.0).contains(&b)),
+            "a bar outside 0 to 1 would draw off the window"
+        );
+        let loudest = bands
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, _)| i)
+            .unwrap();
+        assert!(
+            (28..=42).contains(&loudest),
+            "a 440 Hz tone should light up the middle of the display, not bar {loudest}"
+        );
+        assert!(
+            bands[0] < bands[loudest] * 0.5,
+            "the lowest bar should stay quiet"
+        );
+    }
+
+    #[test]
+    fn pitch_is_refused_when_it_cannot_be_told() {
+        // 0.0 means "cannot be told" - better than a wrong number on screen.
+        let cases: &[(Vec<f32>, u32, &str)] = &[
+            (vec![0.0; 2048], 48_000, "silence"),
+            (vec![0.1; 200], 48_000, "too little audio to measure"),
+            (
+                sine(2048, 200.0, 48_000.0, 0.001),
+                48_000,
+                "too quiet to measure",
+            ),
+            (noise(2048, 0.2), 48_000, "noise is not a voice"),
+            (noise(2048, 0.5), 16_000, "loud noise is still not a voice"),
+        ];
+        for (audio, sample_rate, what) in cases {
+            near(detect_pitch(audio, *sample_rate), 0.0, 0.0, what);
+        }
+    }
+
+    #[test]
+    fn pitch_is_found_for_a_voice() {
+        // (audio, sample rate, expected pitch, allowed error, why)
+        // The ignored test below covers the ones this gets wrong.
+        let cases: &[(Vec<f32>, u32, f32, f32, &str)] = &[
+            (
+                sine(2048, 80.0, 48_000.0, 0.3),
+                48_000,
+                80.0,
+                5.0,
+                "a very low voice",
+            ),
+            (
+                sine(2048, 120.0, 48_000.0, 0.3),
+                48_000,
+                120.0,
+                6.0,
+                "a low voice",
+            ),
+            (
+                sine(2048, 200.0, 48_000.0, 0.3),
+                48_000,
+                200.0,
+                10.0,
+                "an average voice",
+            ),
+            (
+                sine(2048, 400.0, 48_000.0, 0.3),
+                48_000,
+                400.0,
+                20.0,
+                "a high voice",
+            ),
+            (
+                sine(2048, 120.0, 16_000.0, 0.3),
+                16_000,
+                120.0,
+                6.0,
+                "a low voice at 16 kHz",
+            ),
+            (
+                sine(2048, 200.0, 16_000.0, 0.3),
+                16_000,
+                200.0,
+                10.0,
+                "an average voice at 16 kHz",
+            ),
+        ];
+        for (audio, sample_rate, want, tolerance, what) in cases {
+            near(detect_pitch(audio, *sample_rate), *want, *tolerance, what);
+        }
+    }
+
+    #[test]
+    fn pitch_should_never_be_reported_an_octave_too_low() {
+        for hz in [150.0f32, 220.0, 250.0, 280.0, 300.0, 330.0, 350.0] {
+            for sample_rate in [48_000u32, 16_000] {
+                let audio = sine(2048, hz, sample_rate as f32, 0.3);
+                let got = detect_pitch(&audio, sample_rate);
+                assert!(
+                    (got - hz).abs() / hz < 0.06,
+                    "{hz} Hz at {sample_rate} Hz was reported as {got} Hz"
+                );
+            }
+        }
+    }
+
+    // ---- writing the audio out --------------------------------------------
+
+    #[test]
+    fn wav_files_have_a_correct_header() {
+        let wav = to_wav_bytes(&[0.0; 10], 16_000, 1);
+        assert_eq!(wav.len(), 44 + 20, "44-byte header plus 2 bytes per sample");
+        assert_eq!(&wav[0..4], b"RIFF");
+        assert_eq!(&wav[8..12], b"WAVE");
+        assert_eq!(&wav[12..16], b"fmt ");
+        assert_eq!(&wav[36..40], b"data");
+        assert_eq!(u32::from_le_bytes(wav[4..8].try_into().unwrap()), 36 + 20);
+        assert_eq!(
+            u16::from_le_bytes(wav[22..24].try_into().unwrap()),
+            1,
+            "channels"
+        );
+        assert_eq!(
+            u32::from_le_bytes(wav[24..28].try_into().unwrap()),
+            16_000,
+            "sample rate"
+        );
+        assert_eq!(
+            u16::from_le_bytes(wav[34..36].try_into().unwrap()),
+            16,
+            "bits per sample"
+        );
+        assert_eq!(
+            u32::from_le_bytes(wav[40..44].try_into().unwrap()),
+            20,
+            "data size"
+        );
+
+        // An empty recording still produces a valid, empty file.
+        assert_eq!(to_wav_bytes(&[], 16_000, 1).len(), 44);
+    }
+
+    #[test]
+    fn samples_outside_the_allowed_range_are_pulled_back_in() {
+        // (sample, expected 16-bit value, why)
+        let cases: &[(f32, i16, &str)] = &[
+            (0.0, 0, "silence"),
+            (1.0, i16::MAX, "the loudest allowed value"),
+            (-1.0, -i16::MAX, "the quietest allowed value"),
+            (
+                2.0,
+                i16::MAX,
+                "past the top: pulled back, not wrapped around",
+            ),
+            (
+                -2.0,
+                -i16::MAX,
+                "past the bottom: pulled back, not wrapped around",
+            ),
+        ];
+        for &(sample, want, what) in cases {
+            let wav = to_wav_bytes(&[sample], 16_000, 1);
+            let got = i16::from_le_bytes(wav[44..46].try_into().unwrap());
+            assert_eq!(got, want, "{what}");
+
+            let pcm = samples_to_linear16(&[sample]);
+            assert_eq!(
+                i16::from_le_bytes(pcm[0..2].try_into().unwrap()),
+                want,
+                "{what} (streaming path)"
+            );
+        }
+        assert!(samples_to_linear16(&[]).is_empty());
+        assert_eq!(
+            samples_to_linear16(&[0.0; 5]).len(),
+            10,
+            "2 bytes per sample"
+        );
+    }
+
+    // ---- settings that have to survive a restart --------------------------
+
+    #[test]
+    fn tray_settings_survive_a_restart() {
+        // (stored text, expected language, expected debug line, why)
+        let cases: &[(&str, Option<&str>, bool, &str)] = &[
+            (
+                r#"{"language":"bg","debug_stats":true}"#,
+                Some("bg"),
+                true,
+                "both saved",
+            ),
+            (
+                r#"{"language":null,"debug_stats":false}"#,
+                None,
+                false,
+                "auto-detect",
+            ),
+            (
+                r#"{"language":"en"}"#,
+                Some("en"),
+                false,
+                "a settings file written before the debug line existed still loads",
+            ),
+            (
+                r#"{}"#,
+                None,
+                false,
+                "an empty settings file loads as defaults",
+            ),
+        ];
+        for &(stored, want_language, want_debug, what) in cases {
+            let prefs: TrayPrefs = serde_json::from_str(stored).expect(what);
+            assert_eq!(prefs.language.as_deref(), want_language, "{what}: language");
+            assert_eq!(prefs.debug_stats, want_debug, "{what}: debug line");
+        }
+
+        // Written out and read back gives the same thing.
+        let saved = TrayPrefs {
+            language: Some("bg".to_string()),
+            debug_stats: true,
+        };
+        let text = serde_json::to_string(&saved).unwrap();
+        let loaded: TrayPrefs = serde_json::from_str(&text).unwrap();
+        assert_eq!(loaded.language.as_deref(), Some("bg"));
+        assert!(loaded.debug_stats);
+
+        // A damaged file is rejected rather than half-read, so the caller can
+        // fall back to the defaults.
+        assert!(serde_json::from_str::<TrayPrefs>("not json at all").is_err());
+    }
+
+    #[test]
+    fn server_addresses_pick_the_right_protocol() {
+        // (address, secure, expected, why)
+        let cases: &[(&str, bool, &str, &str)] = &[
+            (
+                "hyperwhisper.dev",
+                true,
+                "https://hyperwhisper.dev",
+                "the normal case",
+            ),
+            (
+                "localhost:8080",
+                false,
+                "http://localhost:8080",
+                "a local test server",
+            ),
+        ];
+        for &(address, secure, want, what) in cases {
+            assert_eq!(get_hyperwhisper_api_base(address, secure), want, "{what}");
+        }
+    }
 }

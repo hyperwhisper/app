@@ -42,7 +42,8 @@ impl AudioResampler {
             let chunk: Vec<f32> = self.input_buffer.drain(..self.chunk_size).collect();
             let input_frames = vec![chunk];
 
-            let resampled = self.resampler
+            let resampled = self
+                .resampler
                 .process(&input_frames, None)
                 .map_err(|e| format!("Resampling failed: {}", e))?;
 
@@ -68,7 +69,8 @@ impl AudioResampler {
         let chunk: Vec<f32> = self.input_buffer.drain(..).collect();
         let input_frames = vec![chunk];
 
-        let resampled = self.resampler
+        let resampled = self
+            .resampler
             .process(&input_frames, None)
             .map_err(|e| format!("Resampling failed: {}", e))?;
 

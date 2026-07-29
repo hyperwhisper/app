@@ -49,7 +49,7 @@ impl VadProcessor {
             in_speech: false,
             speech_audio: Vec::new(),
             frame_size,
-            noise_floor: 0.0001, // Very low initial noise floor
+            noise_floor: 0.0001,          // Very low initial noise floor
             noise_adaptation_rate: 0.005, // Slower adaptation to avoid tracking speech as noise
         })
     }
@@ -74,7 +74,7 @@ impl VadProcessor {
         // Update noise floor estimate during silence
         if !is_speech && !self.in_speech {
             self.noise_floor = self.noise_floor * (1.0 - self.noise_adaptation_rate)
-                             + energy * self.noise_adaptation_rate;
+                + energy * self.noise_adaptation_rate;
             // Keep noise floor in reasonable bounds - very low for quiet mics
             self.noise_floor = self.noise_floor.clamp(0.00005, 0.0005);
         }
@@ -163,5 +163,4 @@ impl VadProcessor {
         self.speech_audio.clear();
         self.noise_floor = 0.001;
     }
-
 }
