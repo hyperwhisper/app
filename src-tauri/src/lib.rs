@@ -55,6 +55,8 @@ pub struct AudioState {
     // The tray's tick for the debug line, so the settings switch can move it
     // too. Without this the two disagree until the next restart.
     debug_menu_item: Arc<Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>>,
+    // The key that toggles dictation, as text.
+    shortcut: Arc<Mutex<String>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -346,12 +348,29 @@ fn get_recordings_dir() -> Result<PathBuf, String> {
 
 // The tray menu has no browser storage behind it, so its choices are kept in a
 // small file next to the models.
-#[derive(serde::Serialize, serde::Deserialize, Default)]
+#[derive(serde::Serialize, serde::Deserialize)]
 struct TrayPrefs {
     /// Live microphone numbers and the per-dictation line. Off unless asked
     /// for; serde default keeps older settings files readable.
     #[serde(default)]
     debug_stats: bool,
+    /// The key that starts and stops dictation, written the way Tauri parses
+    /// it: "F3", "CommandOrControl+Shift+D".
+    #[serde(default = "default_shortcut")]
+    shortcut: String,
+}
+
+fn default_shortcut() -> String {
+    "F3".to_string()
+}
+
+impl Default for TrayPrefs {
+    fn default() -> Self {
+        Self {
+            debug_stats: false,
+            shortcut: default_shortcut(),
+        }
+    }
 }
 
 fn tray_prefs_path() -> Option<PathBuf> {
@@ -868,6 +887,59 @@ fn get_use_vad(state: State<'_, AudioState>) -> bool {
     *state.use_vad.lock().unwrap()
 }
 
+// Register the shortcut, replacing whatever was registered before. Returns the
+// reason it failed so the settings page can say why and keep the old key.
+fn apply_shortcut(app: &AppHandle, accelerator: &str) -> Result<(), String> {
+    use std::str::FromStr;
+    use tauri::Manager;
+    use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut};
+
+    let wanted = Shortcut::from_str(accelerator)
+        .map_err(|e| format!("\"{}\" is not a key combination ({})", accelerator, e))?;
+
+    // Let go of the old one first, or registering fails when it is the same key.
+    let previous = app.state::<AudioState>().shortcut.lock().unwrap().clone();
+    if let Ok(old) = Shortcut::from_str(&previous) {
+        let _ = app.global_shortcut().unregister(old);
+    }
+
+    if let Err(e) = app.global_shortcut().register(wanted) {
+        // Put the old one back so the app is not left with no shortcut at all.
+        if let Ok(old) = Shortcut::from_str(&previous) {
+            let _ = app.global_shortcut().register(old);
+        }
+        return Err(format!(
+            "{} could not be registered. Another app is probably using it. ({})",
+            accelerator, e
+        ));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn get_shortcut(state: State<'_, AudioState>) -> String {
+    state.shortcut.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn set_shortcut(app: AppHandle, accelerator: String) -> Result<(), String> {
+    use tauri::Manager;
+    let accelerator = accelerator.trim().to_string();
+    if accelerator.is_empty() {
+        return Err("No key was chosen.".to_string());
+    }
+    apply_shortcut(&app, &accelerator)?;
+
+    let state = app.state::<AudioState>();
+    *state.shortcut.lock().unwrap() = accelerator.clone();
+    save_tray_prefs(&TrayPrefs {
+        debug_stats: *state.debug_stats.lock().unwrap(),
+        shortcut: accelerator,
+    });
+    let _ = app.emit("shortcut-changed", ());
+    Ok(())
+}
+
 // The one place the debug line is switched, so the tray tick, the settings
 // switch, the saved file and both windows can never disagree.
 fn set_debug_stats_everywhere(app: &AppHandle, enabled: bool) {
@@ -879,6 +951,7 @@ fn set_debug_stats_everywhere(app: &AppHandle, enabled: bool) {
     }
     save_tray_prefs(&TrayPrefs {
         debug_stats: enabled,
+        shortcut: state.shortcut.lock().unwrap().clone(),
     });
     let _ = app.emit("debug-stats-changed", enabled);
 }
@@ -2897,6 +2970,7 @@ pub fn run() {
         debug_stats: Arc::new(Mutex::new(saved_prefs.debug_stats)),
         startup_warnings: Arc::new(Mutex::new(startup_warnings)),
         debug_menu_item: Arc::new(Mutex::new(None)),
+        shortcut: Arc::new(Mutex::new(saved_prefs.shortcut.clone())),
     };
 
     tauri::Builder::default()
@@ -2908,7 +2982,7 @@ pub fn run() {
                 .with_handler(|app, _shortcut, event| {
                     use tauri_plugin_global_shortcut::ShortcutState;
                     if event.state() == ShortcutState::Pressed {
-                        eprintln!("[{}] F3 pressed", now());
+                        eprintln!("[{}] shortcut pressed", now());
                         let _ = app.emit("recording-toggled", ());
                     }
                 })
@@ -2952,27 +3026,32 @@ pub fn run() {
             position_indicator,
             get_debug_stats,
             set_debug_stats,
+            get_shortcut,
+            set_shortcut,
             get_startup_warnings,
             hide_main_window,
         ])
         .setup(|app| {
-            // F3 toggles recording from anywhere.
+            // The saved key toggles recording from anywhere.
             #[cfg(desktop)]
             {
                 use tauri::Manager;
-                use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
-                if let Err(e) = app
-                    .global_shortcut()
-                    .register(Shortcut::new(None, Code::F3))
-                {
-                    eprintln!("Failed to register F3 shortcut: {}", e);
-                    app.state::<AudioState>()
+                let handle = app.handle().clone();
+                let wanted = handle
+                    .state::<AudioState>()
+                    .shortcut
+                    .lock()
+                    .unwrap()
+                    .clone();
+                if let Err(e) = apply_shortcut(&handle, &wanted) {
+                    eprintln!("{}", e);
+                    handle
+                        .state::<AudioState>()
                         .startup_warnings
                         .lock()
                         .unwrap()
                         .push(format!(
-                            "F3 could not be registered, so the shortcut will not work. \
-                             Another app is probably using it. ({})",
+                            "{} The shortcut will not work until it is changed in Settings.",
                             e
                         ));
                 }
@@ -3906,25 +3985,47 @@ mod tests {
 
     #[test]
     fn tray_settings_survive_a_restart() {
-        // (stored text, expected debug line, why)
-        let cases: &[(&str, bool, &str)] = &[
-            (r#"{"debug_stats":true}"#, true, "switched on"),
-            (r#"{"debug_stats":false}"#, false, "switched off"),
+        // (stored text, expected debug line, expected key, why)
+        let cases: &[(&str, bool, &str, &str)] = &[
+            (
+                r#"{"debug_stats":true,"shortcut":"CommandOrControl+Shift+D"}"#,
+                true,
+                "CommandOrControl+Shift+D",
+                "both saved",
+            ),
+            (
+                r#"{"debug_stats":false}"#,
+                false,
+                "F3",
+                "a file from before the key could be changed",
+            ),
             (
                 r#"{"language":"en","debug_stats":true}"#,
                 true,
+                "F3",
                 "a file from when the language menu existed still loads",
             ),
-            (r#"{}"#, false, "an empty settings file loads as defaults"),
+            (
+                r#"{}"#,
+                false,
+                "F3",
+                "an empty settings file loads as defaults",
+            ),
         ];
-        for &(stored, want_debug, what) in cases {
+        for &(stored, want_debug, want_key, what) in cases {
             let prefs: TrayPrefs = serde_json::from_str(stored).expect(what);
-            assert_eq!(prefs.debug_stats, want_debug, "{what}");
+            assert_eq!(prefs.debug_stats, want_debug, "{what}: debug line");
+            assert_eq!(prefs.shortcut, want_key, "{what}: key");
         }
 
-        let text = serde_json::to_string(&TrayPrefs { debug_stats: true }).unwrap();
+        let text = serde_json::to_string(&TrayPrefs {
+            debug_stats: true,
+            shortcut: "Alt+Space".to_string(),
+        })
+        .unwrap();
         let loaded: TrayPrefs = serde_json::from_str(&text).unwrap();
         assert!(loaded.debug_stats, "written out and read back");
+        assert_eq!(loaded.shortcut, "Alt+Space");
 
         // A damaged file is rejected rather than half-read, so the caller can
         // fall back to the defaults.

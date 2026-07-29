@@ -7,26 +7,6 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { useTrialKey } from "@/hooks/use-trial-key";
 import { db } from "@/lib/audio-level";
 
-// Parse keybinding from dconf format (e.g., "<Super>m") to readable format (e.g., "Super+m")
-function formatKeybinding(binding: string): string {
-  // Extract modifiers and key from format like "<Super><Ctrl>m" or "<Super>m"
-  const modifiers: string[] = [];
-  let key = binding;
-
-  // Extract all <Modifier> patterns
-  const modifierRegex = /<([^>]+)>/g;
-  let match;
-  while ((match = modifierRegex.exec(binding)) !== null) {
-    modifiers.push(match[1]);
-  }
-
-  // The remaining part after all modifiers is the key
-  key = binding.replace(modifierRegex, '').trim();
-
-  // Join with + separator
-  return [...modifiers, key].join('+');
-}
-
 interface TranscriptionEvent {
   text: string;
   is_final: boolean;
@@ -68,8 +48,8 @@ function App() {
     () => localStorage.getItem("auto_type_enabled") === "true"
   );
 
-  // Keybinding display
-  const [keybinding, setKeybinding] = useState<string | null>(null);
+  // The dictation key, shown in the record button's tooltip.
+  const [shortcut, setShortcut] = useState<string | null>(null);
 
   // Bar position (top or bottom)
   const [barPosition, setBarPosition] = useState<'top' | 'bottom'>(() =>
@@ -172,15 +152,16 @@ function App() {
     };
   }, []);
 
-  // Fetch keybinding from dconf on startup
+  // The dictation key, and any later change to it from Settings.
   useEffect(() => {
-    invoke<string | null>("get_keybinding").then((binding) => {
-      if (binding) {
-        setKeybinding(binding);
-      }
-    }).catch(() => {
-      // dconf not available or no keybinding found
-    });
+    const read = () => {
+      invoke<string>("get_shortcut").then(setShortcut).catch(() => {});
+    };
+    read();
+    const unlisten = listen("shortcut-changed", read);
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
   }, []);
 
   // Note: Hyperwhisper server settings are synced via useTrialKey hook which handles auto-provisioning
@@ -695,8 +676,8 @@ function App() {
                 </button>
                 <div className="absolute top-full right-0 mt-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none flex flex-col items-center">
                   <span>{isProcessing ? "Processing..." : "Start recording"}</span>
-                  {keybinding && (
-                    <span className="text-white/50">{formatKeybinding(keybinding)}</span>
+                  {shortcut && (
+                    <span className="text-white/50 font-mono">{shortcut}</span>
                   )}
                 </div>
               </div>
@@ -924,8 +905,8 @@ function App() {
                 </button>
                 <div className="absolute bottom-full right-0 mb-2 px-2 py-1.5 bg-neutral-700 text-white/80 text-xs rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none flex flex-col items-center">
                   <span>{isProcessing ? "Processing..." : "Start recording"}</span>
-                  {keybinding && (
-                    <span className="text-white/50">{formatKeybinding(keybinding)}</span>
+                  {shortcut && (
+                    <span className="text-white/50 font-mono">{shortcut}</span>
                   )}
                 </div>
               </div>
