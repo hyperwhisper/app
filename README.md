@@ -59,6 +59,10 @@ That does steps 1 to 4 below for you. It installs only what is missing, never re
 Rust or a Homebrew you already have, and stops twice to tell you what to click. You still
 have to grant Accessibility yourself (step 5) — macOS does not let any script do that.
 
+It also asks which offline model to download, defaulting to Whisper Turbo, and fetches it
+in the background while everything else installs. Choose **None** to skip it and pick one
+in Settings later. The model is usually the slowest part, so it waits for it at the end.
+
 Or do it by hand, below. Six steps. Step 5 grants macOS permissions — the app cannot type
 anything until you do it, so do not stop after the build.
 
