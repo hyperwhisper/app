@@ -1,95 +1,65 @@
 use crate::managers::model::{EngineType, ModelManager, AVAILABLE_MODELS};
-use std::io::Write;
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use transcribe_rs::engines::moonshine::MoonshineEngine;
-use transcribe_rs::engines::parakeet::{ParakeetEngine, ParakeetModelParams, QuantizationType};
-use transcribe_rs::engines::whisper::WhisperEngine;
-use transcribe_rs::TranscriptionEngine;
+use transcribe_rs::onnx::moonshine::{MoonshineModel, MoonshineParams, MoonshineVariant};
+use transcribe_rs::onnx::parakeet::{ParakeetModel, ParakeetParams};
+use transcribe_rs::onnx::Quantization;
+use transcribe_rs::whisper_cpp::{WhisperEngine, WhisperInferenceParams, WhisperLoadParams};
 
 /// Loaded transcription engine
 enum LoadedEngine {
     Whisper(WhisperEngine),
-    Parakeet(ParakeetEngine),
-    Moonshine(MoonshineEngine),
+    Parakeet(ParakeetModel),
+    Moonshine(MoonshineModel),
 }
 
+// Whisper writes in whichever style it starts in, so long recordings often come
+// back with no capitals and no punctuation. It copies the style of this text
+// instead. Whisper reads it as background and never types it out.
+//
+// Deliberately about nothing: any subject in here becomes words Whisper expects
+// to hear, and it would start finding them in unrelated speech.
+const STYLE_PROMPT: &str = "Hello. This is an ordinary sentence, written the \
+     normal way, with commas where they belong and a full stop at the end. On \
+     Monday I told Maria that the work would be done by January. Do you see \
+     how it reads? Yes, exactly like that.";
+
 impl LoadedEngine {
-    /// Transcribe audio samples (expects 16kHz mono f32 audio)
-    /// Writes to a temp WAV file and uses transcribe_file API
-    fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
-        // Create temp WAV file
-        let temp_dir = std::env::temp_dir();
-        let temp_path = temp_dir.join(format!("hyperwhisper_temp_{}.wav", std::process::id()));
-
-        // Write WAV file
-        write_wav_file(&temp_path, samples, 16000)
-            .map_err(|e| format!("Failed to write temp WAV: {}", e))?;
-
-        // Transcribe using the engine
+    /// Transcribe audio samples (expects 16kHz mono f32 audio).
+    /// Samples go straight to the engine - no temp WAV file needed.
+    fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
         let result = match self {
             LoadedEngine::Whisper(engine) => {
+                // no_speech_thold is whisper.cpp's own default of 0.6, not the
+                // 0.2 that transcribe-rs sets. Whisper reads audio in 30 second
+                // windows and throws a whole window away when the chance of it
+                // being speech is below this number. At 0.2 a quiet microphone
+                // loses most windows, which is why a long dictation came back
+                // as only its last few sentences, or as nothing at all.
+                let params = WhisperInferenceParams {
+                    language,
+                    no_speech_thold: 0.6,
+                    initial_prompt: Some(STYLE_PROMPT.to_string()),
+                    ..Default::default()
+                };
                 engine
-                    .transcribe_file(&temp_path, None)
+                    .transcribe_with(samples, &params)
                     .map_err(|e| format!("Whisper transcription error: {}", e))
             }
-            LoadedEngine::Parakeet(engine) => {
-                engine
-                    .transcribe_file(&temp_path, None)
+            LoadedEngine::Parakeet(model) => {
+                // transcribe_with prepends 250ms of silence itself: Parakeet's
+                // mel spectrogram preprocessor weakens the start of the audio,
+                // which drops the first words without that padding.
+                model
+                    .transcribe_with(samples, &ParakeetParams::default())
                     .map_err(|e| format!("Parakeet transcription error: {}", e))
             }
-            LoadedEngine::Moonshine(engine) => {
-                engine
-                    .transcribe_file(&temp_path, None)
-                    .map_err(|e| format!("Moonshine transcription error: {}", e))
-            }
+            LoadedEngine::Moonshine(model) => model
+                .transcribe_with(samples, &MoonshineParams::default())
+                .map_err(|e| format!("Moonshine transcription error: {}", e)),
         };
-
-        // Clean up temp file
-        let _ = std::fs::remove_file(&temp_path);
 
         result.map(|r| r.text)
     }
-}
-
-/// Write samples to a WAV file (16-bit PCM, mono, specified sample rate)
-fn write_wav_file(path: &PathBuf, samples: &[f32], sample_rate: u32) -> std::io::Result<()> {
-    let mut file = std::fs::File::create(path)?;
-
-    // Convert f32 samples to i16
-    let pcm_data: Vec<i16> = samples
-        .iter()
-        .map(|&s| (s.clamp(-1.0, 1.0) * 32767.0) as i16)
-        .collect();
-
-    let data_size = (pcm_data.len() * 2) as u32;
-    let file_size = 36 + data_size;
-
-    // Write WAV header
-    file.write_all(b"RIFF")?;
-    file.write_all(&file_size.to_le_bytes())?;
-    file.write_all(b"WAVE")?;
-
-    // fmt chunk
-    file.write_all(b"fmt ")?;
-    file.write_all(&16u32.to_le_bytes())?; // chunk size
-    file.write_all(&1u16.to_le_bytes())?; // audio format (PCM)
-    file.write_all(&1u16.to_le_bytes())?; // num channels (mono)
-    file.write_all(&sample_rate.to_le_bytes())?; // sample rate
-    file.write_all(&(sample_rate * 2).to_le_bytes())?; // byte rate
-    file.write_all(&2u16.to_le_bytes())?; // block align
-    file.write_all(&16u16.to_le_bytes())?; // bits per sample
-
-    // data chunk
-    file.write_all(b"data")?;
-    file.write_all(&data_size.to_le_bytes())?;
-
-    // Write PCM data
-    for sample in pcm_data {
-        file.write_all(&sample.to_le_bytes())?;
-    }
-
-    Ok(())
 }
 
 /// Transcription manager handles loading and using transcription models
@@ -149,32 +119,35 @@ impl TranscriptionManager {
                 let model_file = files.first().ok_or("No model file defined")?;
                 let full_path = model_path.join(model_file.filename);
 
-                let mut whisper = WhisperEngine::new();
-                whisper
-                    .load_model(&full_path)
+                // Load explicitly instead of WhisperEngine::load, whose defaults
+                // turn flash attention on. Flash attention was off before the
+                // transcribe-rs 0.3 upgrade and turning it on made Whisper
+                // output repeated nonsense, sometimes in the wrong language.
+                let params = WhisperLoadParams {
+                    flash_attn: false,
+                    ..Default::default()
+                };
+                let whisper = WhisperEngine::load_with_params(&full_path, params)
                     .map_err(|e| format!("Failed to load Whisper model: {}", e))?;
 
                 LoadedEngine::Whisper(whisper)
             }
             EngineType::Parakeet => {
-                let mut parakeet = ParakeetEngine::new();
-                // Use int8 quantized models
-                let params = ParakeetModelParams {
-                    quantization: QuantizationType::Int8,
-                };
-                parakeet
-                    .load_model_with_params(&model_path, params)
-                    .map_err(|e| format!("Failed to load Parakeet model: {:?}", e))?;
+                // Int8 resolves to encoder-model.int8.onnx / decoder_joint-model.int8.onnx,
+                // which is what we download.
+                let model = ParakeetModel::load(&model_path, &Quantization::Int8)
+                    .map_err(|e| format!("Failed to load Parakeet model: {}", e))?;
 
-                LoadedEngine::Parakeet(parakeet)
+                LoadedEngine::Parakeet(model)
             }
             EngineType::Moonshine => {
-                let mut moonshine = MoonshineEngine::new();
-                moonshine
-                    .load_model(&model_path)
-                    .map_err(|e| format!("Failed to load Moonshine model: {}", e))?;
+                // FP32 means no quantization suffix: encoder_model.onnx /
+                // decoder_model_merged.onnx, matching the downloaded files.
+                let model =
+                    MoonshineModel::load(&model_path, MoonshineVariant::Base, &Quantization::FP32)
+                        .map_err(|e| format!("Failed to load Moonshine model: {}", e))?;
 
-                LoadedEngine::Moonshine(moonshine)
+                LoadedEngine::Moonshine(model)
             }
         };
 
@@ -192,16 +165,16 @@ impl TranscriptionManager {
         self.loaded_engine = None;
     }
 
-    /// Transcribe audio samples (expects 16kHz mono f32 audio)
-    pub fn transcribe(&mut self, samples: &[f32]) -> Result<String, String> {
-        let engine = self
-            .loaded_engine
-            .as_mut()
-            .ok_or("No model loaded")?;
+    /// Transcribe 16kHz mono f32 audio. `language` None = auto-detect.
+    pub fn transcribe(
+        &mut self,
+        samples: &[f32],
+        language: Option<String>,
+    ) -> Result<String, String> {
+        let engine = self.loaded_engine.as_mut().ok_or("No model loaded")?;
 
-        engine.transcribe(samples)
+        engine.transcribe(samples, language)
     }
-
 }
 
 /// Thread-safe wrapper for TranscriptionManager
@@ -209,7 +182,9 @@ pub struct SharedTranscriptionManager(pub Arc<Mutex<TranscriptionManager>>);
 
 impl SharedTranscriptionManager {
     pub fn new(model_manager: Arc<ModelManager>) -> Self {
-        Self(Arc::new(Mutex::new(TranscriptionManager::new(model_manager))))
+        Self(Arc::new(Mutex::new(TranscriptionManager::new(
+            model_manager,
+        ))))
     }
 
     pub fn is_model_loaded(&self) -> bool {

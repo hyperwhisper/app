@@ -96,12 +96,17 @@ export function SettingsPage() {
   const [useVad, setUseVad] = useState(() =>
     localStorage.getItem("use_vad") !== "false"
   );
-  const [showAllModels, setShowAllModels] = useState(false);
 
-  // Appearance settings
-  const [barPosition, setBarPosition] = useState<'top' | 'bottom'>(() =>
-    (localStorage.getItem("bar_position") as 'top' | 'bottom') || 'bottom'
-  );
+  // The debug line. Rust owns this one, not localStorage, because the tray menu
+  // sets it too and the two must not drift apart.
+  const [showDebugStats, setShowDebugStats] = useState(false);
+
+  // The dictation key. Rust owns it: it has to be registered at startup, long
+  // before this window exists.
+  const [shortcut, setShortcut] = useState("F3");
+  const [capturing, setCapturing] = useState(false);
+  const [shortcutError, setShortcutError] = useState<string | null>(null);
+  const [showAllModels, setShowAllModels] = useState(false);
 
   // Disable right-click context menu
   useEffect(() => {
@@ -232,11 +237,63 @@ export function SettingsPage() {
     invoke("set_use_vad", { enabled: useVad });
   }, [useVad]);
 
-  // Save bar position setting
   useEffect(() => {
-    localStorage.setItem("bar_position", barPosition);
-    emit("settings-changed");
-  }, [barPosition]);
+    invoke<string>("get_shortcut").then(setShortcut).catch(() => {});
+  }, []);
+
+  // While capturing, the next key combination becomes the new shortcut. Written
+  // the way Tauri parses it: "CommandOrControl+Shift+D".
+  useEffect(() => {
+    if (!capturing) return;
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (e.key === "Escape") {
+        setCapturing(false);
+        return;
+      }
+
+      // A modifier on its own is not a shortcut, so keep waiting for a real key.
+      if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
+
+      const parts: string[] = [];
+      if (e.metaKey) parts.push("CommandOrControl");
+      if (e.ctrlKey && !e.metaKey) parts.push("Control");
+      if (e.altKey) parts.push("Alt");
+      if (e.shiftKey) parts.push("Shift");
+
+      // e.code is the physical key, so the combination does not change with the
+      // keyboard layout. KeyA -> A, Digit1 -> 1, F3 -> F3.
+      const code = e.code
+        .replace(/^Key/, "")
+        .replace(/^Digit/, "")
+        .replace(/^Numpad/, "Num");
+      parts.push(code);
+      const accelerator = parts.join("+");
+
+      setCapturing(false);
+      setShortcutError(null);
+      invoke("set_shortcut", { accelerator })
+        .then(() => setShortcut(accelerator))
+        .catch((err) => setShortcutError(String(err)));
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [capturing]);
+
+  // Read the current setting, then follow it if the tray changes it.
+  useEffect(() => {
+    invoke<boolean>("get_debug_stats").then(setShowDebugStats).catch(() => {});
+    const unlisten = listen<boolean>("debug-stats-changed", (event) =>
+      setShowDebugStats(event.payload)
+    );
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
 
   // Load audio devices and app version
   useEffect(() => {
@@ -385,6 +442,42 @@ export function SettingsPage() {
       {/* Content */}
       <div className="flex-1 overflow-y-auto p-4">
         <div className="space-y-5 max-w-md mx-auto">
+          {/* Dictation key. Above everything else: it works whichever backend
+              is chosen, and it is the only way to use the app hands-free. */}
+          <div className="space-y-2">
+            <Label className="text-xs uppercase tracking-wide text-white/50">
+              Dictation key
+            </Label>
+            <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+              <div>
+                <span className="text-sm text-white font-mono">
+                  {capturing ? "Press any key..." : shortcut}
+                </span>
+                <p className="text-xs text-white/40">
+                  {capturing
+                    ? "Escape to keep the current one"
+                    : "Starts and stops dictation from any app"}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShortcutError(null);
+                  setCapturing((on) => !on);
+                }}
+                className={`px-3 py-1.5 text-xs rounded-md transition-colors ${
+                  capturing
+                    ? "bg-white/20 text-white"
+                    : "bg-white/10 text-white/80 hover:bg-white/20 hover:text-white"
+                }`}
+              >
+                {capturing ? "Cancel" : "Change"}
+              </button>
+            </div>
+            {shortcutError && (
+              <p className="text-xs text-red-400">{shortcutError}</p>
+            )}
+          </div>
+
           {/* Microphone */}
           <div className="space-y-2">
             <Label className="text-xs uppercase tracking-wide text-white/50">
@@ -781,38 +874,34 @@ export function SettingsPage() {
             </div>
           )}
 
-          {/* Appearance */}
+          {/* Diagnostics. Its own section: it has nothing to do with which
+              backend is chosen, and it lived under the local-only settings
+              where it vanished if you switched backend. */}
           <div className="space-y-2">
             <Label className="text-xs uppercase tracking-wide text-white/50">
-              Appearance
+              Diagnostics
             </Label>
             <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
               <div>
-                <span className="text-sm text-white">Control Bar Position</span>
-                <p className="text-xs text-white/40">Show controls at top or bottom</p>
+                <span className="text-sm text-white">Show debug stats</span>
+                <p className="text-xs text-white/40">Live microphone numbers, and one line per dictation</p>
               </div>
-              <div className="flex gap-1">
-                <button
-                  onClick={() => setBarPosition('top')}
-                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
-                    barPosition === 'top'
-                      ? "bg-white/15 text-white"
-                      : "bg-white/5 text-white/50 hover:bg-white/10"
+              <button
+                onClick={() => {
+                  const next = !showDebugStats;
+                  setShowDebugStats(next);
+                  invoke("set_debug_stats", { enabled: next }).catch(() => {});
+                }}
+                className={`w-10 h-5 rounded-full transition-colors ${
+                  showDebugStats ? "bg-green-500" : "bg-white/20"
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                    showDebugStats ? "translate-x-5" : "translate-x-0.5"
                   }`}
-                >
-                  Top
-                </button>
-                <button
-                  onClick={() => setBarPosition('bottom')}
-                  className={`px-3 py-1.5 text-xs rounded transition-colors ${
-                    barPosition === 'bottom'
-                      ? "bg-white/15 text-white"
-                      : "bg-white/5 text-white/50 hover:bg-white/10"
-                  }`}
-                >
-                  Bottom
-                </button>
-              </div>
+                />
+              </button>
             </div>
           </div>
 
@@ -820,7 +909,7 @@ export function SettingsPage() {
           {appVersion && (
             <div className="pt-4 mt-4 border-t border-white/10">
               <p className="text-xs text-white/30 text-center">
-                HyperWhisper v{appVersion}
+                Omegawhisper v{appVersion}
               </p>
             </div>
           )}

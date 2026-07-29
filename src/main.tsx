@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { SettingsPage } from "@/components/settings-page";
+import { Indicator } from "@/components/indicator";
 import { ThemeProvider } from "@/components/theme-provider";
 import "./index.css";
 
@@ -10,6 +11,11 @@ function Router() {
 
   if (path === "/settings") {
     return <SettingsPage />;
+  }
+
+  // The recording waveform strip runs in its own window at /indicator.
+  if (path === "/indicator") {
+    return <Indicator />;
   }
 
   return <App />;

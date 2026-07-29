@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="212 175 600 600" width="600" height="600">
+  <!--
+    macOS menu-bar icon. Loaded with icon_as_template(true), so macOS discards
+    colour and renders the shape as a flat silhouette that follows the menu-bar
+    theme. Only shape and transparency matter - keep it solid black on clear.
+  -->
+  <g fill="none" stroke="#000000" stroke-width="74" stroke-linecap="round">
+    <path d="M 363.5 618.5 A 210 210 0 1 1 660.5 618.5"/>
+    <path d="M 255 690 H 400"/>
+    <path d="M 624 690 H 769"/>
+  </g>
+</svg>

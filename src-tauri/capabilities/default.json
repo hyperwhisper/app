@@ -2,7 +2,11 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capability for all windows",
-  "windows": ["main", "settings"],
+  "windows": [
+    "main",
+    "settings",
+    "indicator"
+  ],
   "permissions": [
     "core:default",
     "opener:default",
@@ -11,6 +15,10 @@
     "core:window:allow-close",
     "core:window:allow-start-dragging",
     "core:window:allow-set-focus",
-    "core:webview:allow-create-webview-window"
+    "core:window:allow-hide",
+    "core:window:allow-show",
+    "core:webview:allow-create-webview-window",
+    "dialog:default",
+    "clipboard-manager:allow-write-text"
   ]
 }

@@ -1,8 +1,8 @@
 [package]
-name = "hyperwhisper"
-version = "0.1.0"
+name = "omegawhisper"
+version = "0.2.0"
 description = "The most productive speech to text app for linux"
-authors = ["shenoy.ameya@gmail.com"]
+authors = ["shenoy.ameya@gmail.com", "Deyan Danailov <webtemp@gmail.com>"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -11,19 +11,19 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "hyperwhisper_lib"
+name = "omegawhisper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["macos-private-api", "unstable"] }
+tauri = { version = "2", features = ["macos-private-api", "unstable", "tray-icon", "image-png"] }
 tauri-plugin-opener = "2"
+tauri-plugin-global-shortcut = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 cpal = "0.15"
-base64 = "0.22"
 chrono = "0.4"
 dirs = "5"
 tungstenite = { version = "0.21", features = ["native-tls"] }
@@ -36,7 +36,14 @@ hex = "0.4"
 rubato = "0.15"
 clap = { version = "4", features = ["derive"] }
 # Multi-model local transcription
-transcribe-rs = { version = "0.2", features = ["whisper", "parakeet", "moonshine"] }
+transcribe-rs = { version = "0.3", features = ["onnx", "whisper-cpp"] }
+# Turns the recorded audio into the bars the windows draw. The windows used to
+# open the microphone themselves for this, which put the device into processed
+# mode and made macOS wind its gain up over the first seconds of every
+# recording - the first words were nearly inaudible.
+rustfft = "6"
+tauri-plugin-dialog = "2.7.2"
+tauri-plugin-clipboard-manager = "2.3.2"
 # Note: silero-vad-rs has ort version conflict with transcribe-rs, using simple energy-based VAD instead
 
 [dependencies.async-trait]
@@ -45,3 +52,19 @@ version = "0.1"
 [dependencies.tokio]
 version = "1"
 features = ["sync", "rt-multi-thread", "macros", "time"]
+
+
+[target.'cfg(unix)'.dependencies]
+# Only for dup2, to point the app's own output at its log file.
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Posts typed text as Unicode key events. Version matches the copy Tauri
+# already pulls in, so this adds no extra build.
+core-graphics = "0.25"
+# Run the models on the Mac GPU instead of the CPU. Without these the log
+# says "no GPU found" and falls back to BLAS on the CPU, which took about
+# 7 seconds for 3 seconds of speech. Cargo adds these features to the ones
+# already listed in [dependencies]. Kept macOS-only: Metal and CoreML do
+# not exist on Linux.
+transcribe-rs = { version = "0.3", features = ["whisper-metal", "ort-coreml"] }
