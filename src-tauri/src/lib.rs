@@ -57,6 +57,8 @@ pub struct AudioState {
     debug_menu_item: Arc<Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>>,
     // The key that toggles dictation, as text.
     shortcut: Arc<Mutex<String>>,
+    // The tray's "Hide window", greyed out while there is no window to hide.
+    hide_menu_item: Arc<Mutex<Option<tauri::menu::MenuItem<tauri::Wry>>>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -986,6 +988,25 @@ fn delete_recordings_in(dir: &std::path::Path) -> Result<usize, String> {
     Ok(deleted)
 }
 
+// "Hide window" is greyed out when the window is already hidden. It used to
+// look available and do nothing, which reads as the app being broken.
+fn sync_hide_menu_item(app: &AppHandle) {
+    use tauri::Manager;
+    let visible = app
+        .get_webview_window("main")
+        .and_then(|w| w.is_visible().ok())
+        .unwrap_or(false);
+    if let Some(item) = app
+        .state::<AudioState>()
+        .hide_menu_item
+        .lock()
+        .unwrap()
+        .as_ref()
+    {
+        let _ = item.set_enabled(visible);
+    }
+}
+
 // Hides the main window and drops back to a menu-bar app, the same as the tray
 // item does. Closing it outright would end the app.
 #[tauri::command]
@@ -996,6 +1017,7 @@ fn hide_main_window(app: AppHandle) {
     }
     #[cfg(target_os = "macos")]
     let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    sync_hide_menu_item(&app);
 }
 
 // A missing shortcut or permission is invisible otherwise: the app sits in the
@@ -2971,6 +2993,7 @@ pub fn run() {
         startup_warnings: Arc::new(Mutex::new(startup_warnings)),
         debug_menu_item: Arc::new(Mutex::new(None)),
         shortcut: Arc::new(Mutex::new(saved_prefs.shortcut.clone())),
+        hide_menu_item: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
@@ -3127,6 +3150,7 @@ pub fn run() {
 
                 *app.state::<AudioState>().debug_menu_item.lock().unwrap() =
                     Some(debug_item.clone());
+                *app.state::<AudioState>().hide_menu_item.lock().unwrap() = Some(hide_item.clone());
 
                 let mut tray = TrayIconBuilder::new()
                     .menu(&menu)
@@ -3140,6 +3164,7 @@ pub fn run() {
                                 let _ = w.show();
                                 let _ = w.set_focus();
                             }
+                            sync_hide_menu_item(app);
                         }
                         "open_settings_window" => {
                             // regular app so the window is focusable
@@ -3248,6 +3273,7 @@ pub fn run() {
                             }
                             #[cfg(target_os = "macos")]
                             let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+                            sync_hide_menu_item(app);
                         }
                         "debug_stats" => {
                             let now_on = !*app.state::<AudioState>().debug_stats.lock().unwrap();
@@ -3266,6 +3292,8 @@ pub fn run() {
                     tray = tray.icon(icon).icon_as_template(true);
                 }
                 let _ = tray.build(app)?;
+                // The main window starts hidden, so the item starts greyed out.
+                sync_hide_menu_item(app.handle());
             }
 
             // Start as a background menu-bar agent (no Dock icon, no Cmd-Tab).
