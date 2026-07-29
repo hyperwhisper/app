@@ -42,6 +42,7 @@ transcribe-rs = { version = "0.3", features = ["onnx", "whisper-cpp"] }
 # mode and made macOS wind its gain up over the first seconds of every
 # recording - the first words were nearly inaudible.
 rustfft = "6"
+tauri-plugin-dialog = "2.7.2"
 # Note: silero-vad-rs has ort version conflict with transcribe-rs, using simple energy-based VAD instead
 
 [dependencies.async-trait]

@@ -96,6 +96,11 @@ export function SettingsPage() {
   const [useVad, setUseVad] = useState(() =>
     localStorage.getItem("use_vad") !== "false"
   );
+
+  // The debug line. Rust owns this one, not localStorage, because the tray menu
+  // sets it too and the two must not drift apart.
+  const [showDebugStats, setShowDebugStats] = useState(false);
+
   const [showAllModels, setShowAllModels] = useState(false);
 
   // Appearance settings
@@ -231,6 +236,17 @@ export function SettingsPage() {
     localStorage.setItem("use_vad", String(useVad));
     invoke("set_use_vad", { enabled: useVad });
   }, [useVad]);
+
+  // Read the current setting, then follow it if the tray changes it.
+  useEffect(() => {
+    invoke<boolean>("get_debug_stats").then(setShowDebugStats).catch(() => {});
+    const unlisten = listen<boolean>("debug-stats-changed", (event) =>
+      setShowDebugStats(event.payload)
+    );
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, []);
 
   // Save bar position setting
   useEffect(() => {
@@ -762,6 +778,30 @@ export function SettingsPage() {
                   <div
                     className={`w-4 h-4 rounded-full bg-white transition-transform ${
                       useVad ? "translate-x-5" : "translate-x-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Debug stats toggle */}
+              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+                <div>
+                  <span className="text-sm text-white">Show debug stats</span>
+                  <p className="text-xs text-white/40">Live microphone numbers, and one line per dictation</p>
+                </div>
+                <button
+                  onClick={() => {
+                    const next = !showDebugStats;
+                    setShowDebugStats(next);
+                    invoke("set_debug_stats", { enabled: next }).catch(() => {});
+                  }}
+                  className={`w-10 h-5 rounded-full transition-colors ${
+                    showDebugStats ? "bg-green-500" : "bg-white/20"
+                  }`}
+                >
+                  <div
+                    className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                      showDebugStats ? "translate-x-5" : "translate-x-0.5"
                     }`}
                   />
                 </button>

@@ -7,23 +7,6 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { useTrialKey } from "@/hooks/use-trial-key";
 import { db } from "@/lib/audio-level";
 
-interface TranscriptionEvent {
-  text: string;
-  is_final: boolean;
-}
-
-// Numbers behind one finished local dictation, sent by Rust after each run.
-interface DictationStats {
-  model: string;
-  language: string;
-  seconds: number;
-  level_before: number;
-  level_after: number;
-  gain: number;
-  took: number;
-  chars: number;
-}
-
 // Parse keybinding from dconf format (e.g., "<Super>m") to readable format (e.g., "Super+m")
 function formatKeybinding(binding: string): string {
   // Extract modifiers and key from format like "<Super><Ctrl>m" or "<Super>m"
@@ -42,6 +25,22 @@ function formatKeybinding(binding: string): string {
 
   // Join with + separator
   return [...modifiers, key].join('+');
+}
+
+interface TranscriptionEvent {
+  text: string;
+  is_final: boolean;
+}
+
+// Numbers behind one finished local dictation, sent by Rust after each run.
+interface DictationStats {
+  model: string;
+  seconds: number;
+  level_before: number;
+  level_after: number;
+  gain: number;
+  took: number;
+  chars: number;
 }
 
 function App() {
@@ -331,6 +330,21 @@ function App() {
     };
   }, [showToast]);
 
+  // Confirmation that the tray's Delete Recordings actually did something.
+  useEffect(() => {
+    const unlisten = listen<number>("recordings-deleted", (event) => {
+      const n = event.payload;
+      showToast(
+        n === 1 ? "1 recording deleted." : `${n} recordings deleted.`,
+        "info"
+      );
+    });
+
+    return () => {
+      unlisten.then((fn) => fn()).catch(() => {});
+    };
+  }, [showToast]);
+
   // The debug stats line is off unless switched on in the tray menu.
   useEffect(() => {
     invoke<boolean>("get_debug_stats")
@@ -532,6 +546,25 @@ function App() {
       className="flex flex-col h-screen w-screen relative bg-neutral-800/80 backdrop-blur-2xl rounded-2xl shadow-xl overflow-hidden"
       onMouseDown={handleDrag}
     >
+      {/* Hide the window and go back to being a menu-bar app. There is no
+          title bar on this window, so without this there is no way to put it
+          away with the mouse. */}
+      <button
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          e.preventDefault();
+          invoke("hide_main_window").catch(() => {});
+        }}
+        title="Hide window"
+        aria-label="Hide window"
+        className="absolute top-2 right-2 z-50 p-1.5 rounded-md text-white/35 hover:text-white hover:bg-white/10 transition-colors"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18" />
+          <line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
+
       {/* Toast notification */}
       {toast && (
         <div
@@ -737,7 +770,7 @@ function App() {
             className={`absolute bottom-2 left-4 text-[10px] font-mono ${
               stats.chars === 0 ? "text-red-400/70" : "text-white/35"
             }`}
-            title={`${stats.model}, language ${stats.language}, level before boost ${db(
+            title={`${stats.model}, level before boost ${db(
               stats.level_before
             )} dB`}
           >

@@ -47,13 +47,14 @@ pub struct AudioState {
     transcription_manager: SharedTranscriptionManager,
     // VAD enabled flag
     use_vad: Arc<Mutex<bool>>,
-    // forced language for local Whisper (None = auto-detect)
-    transcription_language: Arc<Mutex<Option<String>>>,
     // show the live microphone numbers and the per-dictation line
     debug_stats: Arc<Mutex<bool>>,
     // Problems found at startup. Kept until a window asks: emitting them as
     // they happen is too early, no window is listening yet.
     startup_warnings: Arc<Mutex<Vec<String>>>,
+    // The tray's tick for the debug line, so the settings switch can move it
+    // too. Without this the two disagree until the next restart.
+    debug_menu_item: Arc<Mutex<Option<tauri::menu::CheckMenuItem<tauri::Wry>>>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -112,7 +113,6 @@ struct MicLevel {
 #[derive(Clone, serde::Serialize)]
 struct DictationStats {
     model: String,
-    language: String,
     // Length of the audio handed to the model.
     seconds: f32,
     // Loudness of the spoken parts, before and after the level boost.
@@ -344,13 +344,10 @@ fn get_recordings_dir() -> Result<PathBuf, String> {
     Ok(recordings_dir)
 }
 
-// The language choice lives in the tray menu, which has no
-// browser storage behind it, so they are kept in a small file next to the
-// models. Without this both reset to auto-detect on every restart.
+// The tray menu has no browser storage behind it, so its choices are kept in a
+// small file next to the models.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct TrayPrefs {
-    /// None means auto-detect.
-    language: Option<String>,
     /// Live microphone numbers and the per-dictation line. Off unless asked
     /// for; serde default keeps older settings files readable.
     #[serde(default)]
@@ -871,11 +868,61 @@ fn get_use_vad(state: State<'_, AudioState>) -> bool {
     *state.use_vad.lock().unwrap()
 }
 
+// The one place the debug line is switched, so the tray tick, the settings
+// switch, the saved file and both windows can never disagree.
+fn set_debug_stats_everywhere(app: &AppHandle, enabled: bool) {
+    use tauri::Manager;
+    let state = app.state::<AudioState>();
+    *state.debug_stats.lock().unwrap() = enabled;
+    if let Some(item) = state.debug_menu_item.lock().unwrap().as_ref() {
+        let _ = item.set_checked(enabled);
+    }
+    save_tray_prefs(&TrayPrefs {
+        debug_stats: enabled,
+    });
+    let _ = app.emit("debug-stats-changed", enabled);
+}
+
+#[tauri::command]
+fn set_debug_stats(app: AppHandle, enabled: bool) {
+    set_debug_stats_everywhere(&app, enabled);
+}
+
 // Asked by each window when it opens; after that the tray sends
 // "debug-stats-changed" when it is switched.
 #[tauri::command]
 fn get_debug_stats(state: State<'_, AudioState>) -> bool {
     *state.debug_stats.lock().unwrap()
+}
+
+// Deletes every recording in a folder. Only .wav files, so anything else that
+// happens to be in there survives. Returns how many went.
+fn delete_recordings_in(dir: &std::path::Path) -> Result<usize, String> {
+    let entries =
+        fs::read_dir(dir).map_err(|e| format!("Could not read {}: {}", dir.display(), e))?;
+    let mut deleted = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("wav") {
+            match fs::remove_file(&path) {
+                Ok(()) => deleted += 1,
+                Err(e) => eprintln!("Could not delete {}: {}", path.display(), e),
+            }
+        }
+    }
+    Ok(deleted)
+}
+
+// Hides the main window and drops back to a menu-bar app, the same as the tray
+// item does. Closing it outright would end the app.
+#[tauri::command]
+fn hide_main_window(app: AppHandle) {
+    use tauri::Manager;
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 }
 
 // A missing shortcut or permission is invisible otherwise: the app sits in the
@@ -1914,13 +1961,11 @@ async fn start_recording(
     // Get VAD setting
     let use_vad = *state.use_vad.lock().unwrap();
 
-    let transcription_language = state.transcription_language.lock().unwrap().clone();
-
     // Clone transcription manager for the thread
     let transcription_manager = state.transcription_manager.0.clone();
 
-    // Clear previous recording
-    *state.recorded_samples.lock().unwrap() = Vec::new();
+    // Cleared, then given room below once the sample rate is known.
+    state.recorded_samples.lock().unwrap().clear();
 
     // Get audio device info in a blocking thread to avoid interfering with GTK main loop
     // This is critical for Bluetooth devices on PipeWire which can crash GNOME
@@ -1937,6 +1982,18 @@ async fn start_recording(
     let sample_format = config.sample_format();
     let sample_rate = config.sample_rate().0;
     let channels = config.channels();
+
+    // Room for five minutes, set aside now. The audio callback appends to this
+    // list and must never be slow: growing it there means copying every sample
+    // recorded so far into a bigger block, which at two minutes is 23 MB, in the
+    // one place that cannot afford to wait. The memory is handed back when the
+    // recording stops.
+    const RESERVE_SECONDS: usize = 300;
+    state
+        .recorded_samples
+        .lock()
+        .unwrap()
+        .reserve(sample_rate as usize * RESERVE_SECONDS);
 
     // Use default buffer size - fixed sizes can cause issues with Bluetooth on PipeWire
     let stream_config: cpal::StreamConfig = config.into();
@@ -2119,9 +2176,6 @@ async fn start_recording(
                         "dictation-stats",
                         DictationStats {
                             model: "skipped - no speech".to_string(),
-                            language: transcription_language
-                                .clone()
-                                .unwrap_or_else(|| "auto".to_string()),
                             seconds: audio_seconds,
                             level_before,
                             level_after: level_before,
@@ -2155,7 +2209,7 @@ async fn start_recording(
                 let (result, model_id) = match transcription_manager.lock() {
                     Ok(mut manager) => {
                         let id = manager.get_loaded_model_id().unwrap_or("none").to_string();
-                        let r = manager.transcribe(&all_audio, transcription_language.clone());
+                        let r = manager.transcribe(&all_audio, None);
                         (r, id)
                     }
                     Err(e) => {
@@ -2178,9 +2232,6 @@ async fn start_recording(
                     "dictation-stats",
                     DictationStats {
                         model: model_id.clone(),
-                        language: transcription_language
-                            .clone()
-                            .unwrap_or_else(|| "auto".to_string()),
                         seconds: audio_seconds,
                         level_before,
                         level_after,
@@ -2196,12 +2247,11 @@ async fn start_recording(
                 // Everything that differs between a good result and a bad one,
                 // on one line, so two dictations can be compared directly.
                 eprintln!(
-                    "[{}] dictation: model={} language={} vad={} audio={:.1}s \
+                    "[{}] dictation: model={} vad={} audio={:.1}s \
                      peak={:.2} rms={:.3} silence={:.0}% trimmed={:.1}s \
                      speech={:.4}->{:.4} gain={:.1}x took={:.1}s",
                     now(),
                     model_id,
-                    transcription_language.as_deref().unwrap_or("auto"),
                     use_vad,
                     audio_seconds,
                     peak,
@@ -2844,13 +2894,14 @@ pub fn run() {
         transcription_manager,
         // Keep speech only. Feeding silence to Whisper makes it invent text.
         use_vad: Arc::new(Mutex::new(true)),
-        transcription_language: Arc::new(Mutex::new(saved_prefs.language.clone())),
         debug_stats: Arc::new(Mutex::new(saved_prefs.debug_stats)),
         startup_warnings: Arc::new(Mutex::new(startup_warnings)),
+        debug_menu_item: Arc::new(Mutex::new(None)),
     };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         // Global shortcut toggles recording from anywhere.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -2900,7 +2951,9 @@ pub fn run() {
             get_keybinding,
             position_indicator,
             get_debug_stats,
+            set_debug_stats,
             get_startup_warnings,
+            hide_main_window,
         ])
         .setup(|app| {
             // F3 toggles recording from anywhere.
@@ -2948,48 +3001,21 @@ pub fn run() {
                 )?;
                 let hide_item =
                     MenuItem::with_id(app, "hide_window", "Hide window", true, None::<&str>)?;
-                let recordings_item = MenuItem::with_id(
+                let recordings_open =
+                    MenuItem::with_id(app, "open_recordings", "Open Folder", true, None::<&str>)?;
+                let recordings_delete = MenuItem::with_id(
                     app,
-                    "open_recordings",
-                    "Open recordings folder",
+                    "delete_recordings",
+                    "Delete Recordings",
                     true,
                     None::<&str>,
                 )?;
-
-                // Language submenu (affects local Whisper transcription only).
-                // Tick whatever was chosen last time, not always Auto-detect.
-                let saved_language = app
-                    .state::<AudioState>()
-                    .transcription_language
-                    .lock()
-                    .unwrap()
-                    .clone();
-                let lang_auto = CheckMenuItem::with_id(
+                let recordings_item = Submenu::with_items(
                     app,
-                    "lang_auto",
-                    "Auto-detect",
+                    "Recordings",
                     true,
-                    saved_language.is_none(),
-                    None::<&str>,
+                    &[&recordings_open, &recordings_delete],
                 )?;
-                let lang_en = CheckMenuItem::with_id(
-                    app,
-                    "lang_en",
-                    "English",
-                    true,
-                    saved_language.as_deref() == Some("en"),
-                    None::<&str>,
-                )?;
-                let lang_bg = CheckMenuItem::with_id(
-                    app,
-                    "lang_bg",
-                    "Bulgarian",
-                    true,
-                    saved_language.as_deref() == Some("bg"),
-                    None::<&str>,
-                )?;
-                let lang_menu =
-                    Submenu::with_items(app, "Language", true, &[&lang_auto, &lang_en, &lang_bg])?;
 
                 // Live microphone numbers on the indicator and the line under
                 // the text. Useful when a dictation goes wrong, noise the rest
@@ -3011,18 +3037,17 @@ pub fn run() {
                     app,
                     &[
                         &open_item,
-                        &settings_item,
                         &hide_item,
                         &recordings_item,
-                        &lang_menu,
                         &debug_item,
+                        &settings_item,
                         &sep,
                         &quit_item,
                     ],
                 )?;
 
-                let (la, le, lb) = (lang_auto.clone(), lang_en.clone(), lang_bg.clone());
-                let debug_check = debug_item.clone();
+                *app.state::<AudioState>().debug_menu_item.lock().unwrap() =
+                    Some(debug_item.clone());
 
                 let mut tray = TrayIconBuilder::new()
                     .menu(&menu)
@@ -3100,6 +3125,44 @@ pub fn run() {
                                 Err(e) => eprintln!("No recordings folder: {}", e),
                             }
                         }
+                        "delete_recordings" => {
+                            // Irreversible, so it asks first. show() takes a
+                            // callback rather than blocking: the tray handler
+                            // runs on the main thread, and waiting for a window
+                            // there would freeze the app.
+                            use tauri_plugin_dialog::{
+                                DialogExt, MessageDialogButtons, MessageDialogKind,
+                            };
+                            let handle = app.clone();
+                            app.dialog()
+                                .message(
+                                    "This action will delete all LOCAL recordings from your \
+                                     hard drive.",
+                                )
+                                .title("Delete recordings")
+                                .kind(MessageDialogKind::Warning)
+                                .buttons(MessageDialogButtons::OkCancelCustom(
+                                    "Delete".to_string(),
+                                    "Cancel".to_string(),
+                                ))
+                                .show(move |confirmed| {
+                                    if !confirmed {
+                                        return;
+                                    }
+                                    match get_recordings_dir()
+                                        .and_then(|dir| delete_recordings_in(&dir))
+                                    {
+                                        Ok(count) => {
+                                            eprintln!("Deleted {} recordings", count);
+                                            let _ = handle.emit("recordings-deleted", count);
+                                        }
+                                        Err(e) => {
+                                            eprintln!("Could not delete recordings: {}", e);
+                                            let _ = handle.emit("transcription-error", e);
+                                        }
+                                    }
+                                });
+                        }
                         "hide_window" => {
                             if let Some(w) = app.get_webview_window("main") {
                                 let _ = w.hide();
@@ -3107,41 +3170,9 @@ pub fn run() {
                             #[cfg(target_os = "macos")]
                             let _ = app.set_activation_policy(tauri::ActivationPolicy::Accessory);
                         }
-                        "lang_auto" | "lang_en" | "lang_bg" => {
-                            let language = match event.id.as_ref() {
-                                "lang_en" => Some("en".to_string()),
-                                "lang_bg" => Some("bg".to_string()),
-                                _ => None,
-                            };
-                            let state = app.state::<AudioState>();
-                            *state.transcription_language.lock().unwrap() = language.clone();
-
-                            let _ = la.set_checked(language.is_none());
-                            let _ = le.set_checked(language.as_deref() == Some("en"));
-                            let _ = lb.set_checked(language.as_deref() == Some("bg"));
-
-                            let state = app.state::<AudioState>();
-                            let debug_stats = *state.debug_stats.lock().unwrap();
-                            save_tray_prefs(&TrayPrefs {
-                                language,
-                                debug_stats,
-                            });
-                        }
                         "debug_stats" => {
-                            let state = app.state::<AudioState>();
-                            let enabled = {
-                                let mut flag = state.debug_stats.lock().unwrap();
-                                *flag = !*flag;
-                                *flag
-                            };
-                            let _ = debug_check.set_checked(enabled);
-                            let _ = app.emit("debug-stats-changed", enabled);
-
-                            let language = state.transcription_language.lock().unwrap().clone();
-                            save_tray_prefs(&TrayPrefs {
-                                language,
-                                debug_stats: enabled,
-                            });
+                            let now_on = !*app.state::<AudioState>().debug_stats.lock().unwrap();
+                            set_debug_stats_everywhere(app, now_on);
                         }
                         "quit" => app.exit(0),
                         _ => {}
@@ -3875,52 +3906,78 @@ mod tests {
 
     #[test]
     fn tray_settings_survive_a_restart() {
-        // (stored text, expected language, expected debug line, why)
-        let cases: &[(&str, Option<&str>, bool, &str)] = &[
+        // (stored text, expected debug line, why)
+        let cases: &[(&str, bool, &str)] = &[
+            (r#"{"debug_stats":true}"#, true, "switched on"),
+            (r#"{"debug_stats":false}"#, false, "switched off"),
             (
-                r#"{"language":"bg","debug_stats":true}"#,
-                Some("bg"),
+                r#"{"language":"en","debug_stats":true}"#,
                 true,
-                "both saved",
+                "a file from when the language menu existed still loads",
             ),
-            (
-                r#"{"language":null,"debug_stats":false}"#,
-                None,
-                false,
-                "auto-detect",
-            ),
-            (
-                r#"{"language":"en"}"#,
-                Some("en"),
-                false,
-                "a settings file written before the debug line existed still loads",
-            ),
-            (
-                r#"{}"#,
-                None,
-                false,
-                "an empty settings file loads as defaults",
-            ),
+            (r#"{}"#, false, "an empty settings file loads as defaults"),
         ];
-        for &(stored, want_language, want_debug, what) in cases {
+        for &(stored, want_debug, what) in cases {
             let prefs: TrayPrefs = serde_json::from_str(stored).expect(what);
-            assert_eq!(prefs.language.as_deref(), want_language, "{what}: language");
-            assert_eq!(prefs.debug_stats, want_debug, "{what}: debug line");
+            assert_eq!(prefs.debug_stats, want_debug, "{what}");
         }
 
-        // Written out and read back gives the same thing.
-        let saved = TrayPrefs {
-            language: Some("bg".to_string()),
-            debug_stats: true,
-        };
-        let text = serde_json::to_string(&saved).unwrap();
+        let text = serde_json::to_string(&TrayPrefs { debug_stats: true }).unwrap();
         let loaded: TrayPrefs = serde_json::from_str(&text).unwrap();
-        assert_eq!(loaded.language.as_deref(), Some("bg"));
-        assert!(loaded.debug_stats);
+        assert!(loaded.debug_stats, "written out and read back");
 
         // A damaged file is rejected rather than half-read, so the caller can
         // fall back to the defaults.
         assert!(serde_json::from_str::<TrayPrefs>("not json at all").is_err());
+    }
+
+    // ---- deleting recordings ----------------------------------------------
+
+    #[test]
+    fn deleting_recordings_removes_only_recordings() {
+        let dir = std::env::temp_dir().join(format!("omegawhisper-delete-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+
+        // (file name, should it survive, why)
+        let files: &[(&str, bool, &str)] = &[
+            ("2026-01-01.wav", false, "a recording"),
+            ("2026-01-01-model-input.wav", false, "what the model heard"),
+            ("notes.txt", true, "someone else's file"),
+            ("tray-prefs.json", true, "a settings file"),
+            ("recording.wav.bak", true, "a backup, not a recording"),
+            ("WAV", true, "no extension at all"),
+        ];
+        for (name, _, _) in files {
+            fs::write(dir.join(name), b"x").unwrap();
+        }
+        // A folder must survive too - only files are considered.
+        fs::create_dir(dir.join("old")).unwrap();
+        fs::write(dir.join("old").join("kept.wav"), b"x").unwrap();
+
+        let deleted = delete_recordings_in(&dir).unwrap();
+        assert_eq!(deleted, 2, "only the two recordings should go");
+
+        for (name, survives, why) in files {
+            assert_eq!(dir.join(name).exists(), *survives, "{name}: {why}");
+        }
+        assert!(
+            dir.join("old").join("kept.wav").exists(),
+            "subfolders untouched"
+        );
+        assert!(dir.exists(), "the folder itself must stay");
+
+        // Running it again on an empty folder is not an error.
+        assert_eq!(delete_recordings_in(&dir).unwrap(), 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn deleting_from_a_missing_folder_is_an_error_not_a_panic() {
+        let missing = std::env::temp_dir().join("omegawhisper-does-not-exist-at-all");
+        let _ = fs::remove_dir_all(&missing);
+        assert!(delete_recordings_in(&missing).is_err());
     }
 
     #[test]
