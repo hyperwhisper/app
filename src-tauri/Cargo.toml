@@ -1,6 +1,6 @@
 [package]
 name = "omegawhisper"
-version = "0.1.0"
+version = "0.2.0"
 description = "The most productive speech to text app for linux"
 authors = ["shenoy.ameya@gmail.com", "Deyan Danailov <webtemp@gmail.com>"]
 edition = "2021"
