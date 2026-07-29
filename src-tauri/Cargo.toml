@@ -43,6 +43,7 @@ transcribe-rs = { version = "0.3", features = ["onnx", "whisper-cpp"] }
 # recording - the first words were nearly inaudible.
 rustfft = "6"
 tauri-plugin-dialog = "2.7.2"
+tauri-plugin-clipboard-manager = "2.3.2"
 # Note: silero-vad-rs has ort version conflict with transcribe-rs, using simple energy-based VAD instead
 
 [dependencies.async-trait]

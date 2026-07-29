@@ -96,6 +96,12 @@ export function Indicator() {
   // True between the stop and the finished text: the model is running and the
   // whole app is unresponsive, so this has to be obvious.
   const [transcribing, setTranscribing] = useState(false);
+  // Something went wrong. Shown here because this is the window that is
+  // actually on screen when it happens - the main window is normally hidden.
+  const [errorText, setErrorText] = useState<string | null>(null);
+  // The drawing loop is set up once and cannot read React state.
+  const errorRef = useRef(false);
+
   // The line of live numbers is off unless switched on in the tray menu.
   const [showStats, setShowStats] = useState(false);
   // The drawing loop cannot read React state, so it reads this.
@@ -315,6 +321,8 @@ export function Indicator() {
       if (!active) {
         mic = { peak: 0, rms: 0, seconds: 0, pitch: 0, bands: [] };
         setTranscribing(false);
+        errorRef.current = false;
+        setErrorText(null);
         if (textRef.current) textRef.current.textContent = "";
         for (const row of history) row.fill(0);
       }
@@ -331,11 +339,23 @@ export function Indicator() {
         listen<{ text: string }>("transcription", (e) => {
           if (textRef.current) textRef.current.textContent = e.payload.text;
         }),
+        listen<string>("transcription-error", (e) => {
+          errorRef.current = true;
+          setErrorText(e.payload);
+          setTranscribing(false);
+        }),
         listen("transcription-processing", () => {
           setTranscribing(true);
         }),
         listen("transcription-complete", () => {
           setTranscribing(false);
+        }),
+        listen<boolean>("mic-level", () => {
+          // Sound is arriving again, so the last error is history.
+          if (errorRef.current) {
+            errorRef.current = false;
+            setErrorText(null);
+          }
         })
       );
     } catch {
@@ -428,7 +448,31 @@ export function Indicator() {
           paddingRight: 8,
         }}
       />
-      {transcribing && (
+      {errorText && (
+        <div
+          className="absolute inset-0 flex items-center justify-center px-4"
+          style={{ pointerEvents: "none" }}
+        >
+          <div
+            style={{
+              maxHeight: "100%",
+              overflowY: "auto",
+              padding: "10px 14px",
+              borderRadius: 10,
+              background: "rgba(24, 10, 10, 0.94)",
+              border: "1px solid rgba(255, 138, 128, 0.45)",
+              color: "rgb(255, 190, 184)",
+              fontFamily: "ui-sans-serif, system-ui, -apple-system, sans-serif",
+              fontSize: 12,
+              lineHeight: 1.45,
+              textAlign: "left",
+            }}
+          >
+            {errorText}
+          </div>
+        </div>
+      )}
+      {transcribing && !errorText && (
         <div
           className="absolute inset-0 flex flex-col items-center justify-center gap-3"
           style={{ pointerEvents: "none" }}

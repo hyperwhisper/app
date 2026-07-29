@@ -34,8 +34,6 @@ pub struct AudioState {
     hyperwhisper_server_url: Arc<Mutex<String>>,
     hyperwhisper_server_https: Arc<Mutex<bool>>,
     hyperwhisper_api_key: Arc<Mutex<Option<String>>>,
-    // Real-time typing: type transcription as it streams in
-    auto_type_transcription: Arc<Mutex<bool>>,
     // Selected audio input device ID from WirePlumber (None = auto-select)
     selected_device_id: Arc<Mutex<Option<u32>>>,
     // Local transcription settings
@@ -455,11 +453,6 @@ fn migrate_legacy_data_dir() {
             e
         ),
     }
-}
-
-#[tauri::command]
-fn set_auto_type_transcription(state: State<'_, AudioState>, enabled: bool) {
-    *state.auto_type_transcription.lock().unwrap() = enabled;
 }
 
 // WirePlumber device info with ID for selection
@@ -2113,7 +2106,6 @@ async fn start_recording(
     let app_handle_ws = app_handle.clone();
     let is_recording_ws = is_recording_arc.clone();
     let stop_signal_ws = state.stop_signal.clone();
-    let auto_type = *state.auto_type_transcription.lock().unwrap();
 
     if use_local {
         // Spawn local transcription thread using multi-model transcription manager
@@ -2386,25 +2378,29 @@ async fn start_recording(
                             eprintln!("Transcription returned no text; nothing to type.");
                         }
                         if !text.is_empty() {
-                            if auto_type {
-                                eprintln!(
-                                    "Auto-typing {} characters: {:?}",
-                                    text.chars().count(),
-                                    text
-                                );
-                                if let Err(e) = type_text_internal(&format!("{} ", text)) {
-                                    eprintln!("Auto-type failed: {}", e);
-                                    // Typing was refused, so hand the text to
-                                    // the clipboard instead. A minute of speech
-                                    // must never end up nowhere.
-                                    let _ = app_handle_ws.emit("auto-type-failed", &text);
-                                    let _ = app_handle_ws.emit("transcription-error", e);
-                                }
-                            } else {
-                                eprintln!(
-                                    "Auto-type is off: {} characters went to the window only.",
-                                    text.chars().count()
-                                );
+                            eprintln!(
+                                "Auto-typing {} characters: {:?}",
+                                text.chars().count(),
+                                text
+                            );
+                            if let Err(e) = type_text_internal(&format!("{} ", text)) {
+                                eprintln!("Auto-type failed: {}", e);
+                                // A minute of speech must never end up nowhere.
+                                // Done here rather than in a window: the window
+                                // that used to do it is normally hidden, and the
+                                // browser refuses the clipboard without focus.
+                                use tauri_plugin_clipboard_manager::ClipboardExt;
+                                let message = match app_handle_ws.clipboard().write_text(&*text) {
+                                    Ok(()) => format!(
+                                        "{} The text is on the clipboard - press Cmd+V to paste it.",
+                                        e
+                                    ),
+                                    Err(clip) => {
+                                        eprintln!("Clipboard also failed: {}", clip);
+                                        format!("{} The clipboard could not be used either ({}), so the text is only in the Omegawhisper window.", e, clip)
+                                    }
+                                };
+                                let _ = app_handle_ws.emit("transcription-error", message);
                             }
                             let event = TranscriptionEvent {
                                 text,
@@ -2466,65 +2462,64 @@ async fn start_recording(
             let _ = ws.set_read_timeout(Some(Duration::from_millis(50)));
 
             // Helper closure to process incoming Deepgram messages
-            let process_message =
-                |ws: &mut WsStream, app_handle: &AppHandle, auto_type: bool| -> Option<bool> {
-                    match ws.read() {
-                        Ok(Message::Text(text)) => {
-                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
-                                if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
-                                    let transcript = json
-                                        .get("channel")
-                                        .and_then(|c| c.get("alternatives"))
-                                        .and_then(|a| a.get(0))
-                                        .and_then(|a| a.get("transcript"))
-                                        .and_then(|t| t.as_str())
-                                        .unwrap_or("");
+            let process_message = |ws: &mut WsStream, app_handle: &AppHandle| -> Option<bool> {
+                match ws.read() {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+                            if json.get("type").and_then(|t| t.as_str()) == Some("Results") {
+                                let transcript = json
+                                    .get("channel")
+                                    .and_then(|c| c.get("alternatives"))
+                                    .and_then(|a| a.get(0))
+                                    .and_then(|a| a.get("transcript"))
+                                    .and_then(|t| t.as_str())
+                                    .unwrap_or("");
 
-                                    let is_final = json
-                                        .get("is_final")
-                                        .and_then(|f| f.as_bool())
-                                        .unwrap_or(false);
+                                let is_final = json
+                                    .get("is_final")
+                                    .and_then(|f| f.as_bool())
+                                    .unwrap_or(false);
 
-                                    if !transcript.is_empty() {
-                                        // Type final transcriptions in real-time if enabled
-                                        if is_final && auto_type {
-                                            // Add a space before the text (except potentially first word)
-                                            let text_to_type = format!("{} ", transcript);
-                                            eprintln!(
-                                                "Auto-typing {} characters: {:?}",
-                                                transcript.chars().count(),
-                                                transcript
-                                            );
-                                            if let Err(e) = type_text_internal(&text_to_type) {
-                                                eprintln!("Auto-type failed: {}", e);
-                                            }
+                                if !transcript.is_empty() {
+                                    // Type final transcriptions in real-time if enabled
+                                    if is_final {
+                                        // Add a space before the text (except potentially first word)
+                                        let text_to_type = format!("{} ", transcript);
+                                        eprintln!(
+                                            "Auto-typing {} characters: {:?}",
+                                            transcript.chars().count(),
+                                            transcript
+                                        );
+                                        if let Err(e) = type_text_internal(&text_to_type) {
+                                            eprintln!("Auto-type failed: {}", e);
                                         }
-
-                                        let event = TranscriptionEvent {
-                                            text: transcript.to_string(),
-                                            is_final,
-                                        };
-                                        let _ = app_handle.emit("transcription", event);
                                     }
+
+                                    let event = TranscriptionEvent {
+                                        text: transcript.to_string(),
+                                        is_final,
+                                    };
+                                    let _ = app_handle.emit("transcription", event);
                                 }
                             }
-                            Some(true) // Continue
                         }
-                        Ok(Message::Close(_)) => {
-                            Some(false) // Stop
-                        }
-                        Err(tungstenite::Error::Io(ref e))
-                            if e.kind() == std::io::ErrorKind::WouldBlock
-                                || e.kind() == std::io::ErrorKind::TimedOut =>
-                        {
-                            None // Timeout, no message
-                        }
-                        Err(_) => {
-                            Some(false) // Error, stop
-                        }
-                        _ => Some(true),
+                        Some(true) // Continue
                     }
-                };
+                    Ok(Message::Close(_)) => {
+                        Some(false) // Stop
+                    }
+                    Err(tungstenite::Error::Io(ref e))
+                        if e.kind() == std::io::ErrorKind::WouldBlock
+                            || e.kind() == std::io::ErrorKind::TimedOut =>
+                    {
+                        None // Timeout, no message
+                    }
+                    Err(_) => {
+                        Some(false) // Error, stop
+                    }
+                    _ => Some(true),
+                }
+            };
 
             loop {
                 // Check if we should stop
@@ -2538,7 +2533,7 @@ async fn start_recording(
                     // Keep reading for pending transcription results (up to 5 seconds)
                     let drain_start = std::time::Instant::now();
                     while drain_start.elapsed() < Duration::from_secs(5) {
-                        match process_message(&mut ws, &app_handle_ws, auto_type) {
+                        match process_message(&mut ws, &app_handle_ws) {
                             Some(false) => break, // Close or error
                             Some(true) => {}      // Got a message, keep reading
                             None => {
@@ -2568,7 +2563,7 @@ async fn start_recording(
                 }
 
                 // Try to read messages from Deepgram (with timeout)
-                if let Some(false) = process_message(&mut ws, &app_handle_ws, auto_type) {
+                if let Some(false) = process_message(&mut ws, &app_handle_ws) {
                     // Connection closed or error - still emit complete event
                     let _ = app_handle_ws.emit("transcription-complete", ());
                     break;
@@ -2980,7 +2975,6 @@ pub fn run() {
         hyperwhisper_server_url: Arc::new(Mutex::new("hyperwhisper.dev".to_string())),
         hyperwhisper_server_https: Arc::new(Mutex::new(true)),
         hyperwhisper_api_key: Arc::new(Mutex::new(None)),
-        auto_type_transcription: Arc::new(Mutex::new(false)),
         selected_device_id: Arc::new(Mutex::new(None)),
         use_local_transcription: Arc::new(Mutex::new(false)),
         local_model_path: Arc::new(Mutex::new(None)),
@@ -2999,6 +2993,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         // Global shortcut toggles recording from anywhere.
         .plugin(
             tauri_plugin_global_shortcut::Builder::new()
@@ -3019,7 +3014,6 @@ pub fn run() {
             set_api_key,
             set_hyperwhisper_server_settings,
             type_text,
-            set_auto_type_transcription,
             list_audio_devices,
             get_selected_device,
             set_selected_device,
