@@ -5,7 +5,7 @@
 <h1 align="center">Omegawhisper</h1>
 
 <p align="center">
-  Press F3 anywhere on your Mac, speak, and the text is typed into whatever app you are in.
+  Press one key anywhere on your Mac, speak, and the text is typed into whatever app you are in.
 </p>
 
 ---
@@ -22,7 +22,8 @@
 
 Omegawhisper sits in your menu bar. It has no Dock icon and no window in your way.
 Press **F3**, speak, press **F3** again. A small spectrogram shows it is listening, and
-the text is typed into the app you were already using.
+the text is typed into the app you were already using. F3 is only the default — pick any
+key in Settings.
 
 Transcription runs three ways:
 
@@ -34,12 +35,12 @@ Transcription runs three ways:
 
 ### Features
 
-- Global **F3** shortcut, works in any app
+- One global shortcut, works in any app. **F3** by default, changeable in Settings
 - Types into other apps with Unicode key events
 - Local models run on the Mac GPU (Metal + CoreML)
 - Spectrogram indicator window while you speak
-- Recordings saved as WAV, with waveform playback
-- Voice detection, so silence is never sent to the model
+- Recordings saved as WAV, and deletable from the menu bar
+- Silence is never sent to the model, so it cannot invent text from a quiet room
 - Dark theme
 
 ## Install (macOS)
@@ -116,6 +117,10 @@ code and does nothing on macOS; change the input in System Settings → Sound.
 
 Press **F3** to start, speak, press **F3** to stop. That is the whole app.
 
+To use a different key, open **Settings** → **Dictation key** → **Change**, then press the
+combination you want. If it is already taken by another app it says so and keeps the old
+one, so you can never end up with no shortcut.
+
 The menu-bar icon has:
 
 | Item | What it does |
@@ -124,14 +129,15 @@ The menu-bar icon has:
 | Hide window | Puts it away again, back to menu bar only |
 | Recordings → Open Folder | `~/Library/Application Support/omegawhisper/recordings` |
 | Recordings → Delete Recordings | Deletes every saved WAV. Asks first |
-| Debug stats | Live microphone numbers, and a line of numbers under each result |
-| Settings | Backend, model, trial key |
+| Show debug stats | Live microphone numbers, and a line of numbers under each result. Also in Settings |
+| Settings | Dictation key, backend, model, trial key |
 | Quit | Quits |
 
 ## Troubleshooting
 
-**Nothing happens when I press F3.** Another app has taken F3, or Accessibility is off.
-Open the main window — startup problems are shown there.
+**Nothing happens when I press the key.** Another app has taken it, or Accessibility is
+off. Open the main window — startup problems appear there as a message. Pick a different
+key in Settings → Dictation key.
 
 **Text is transcribed but never typed.** Accessibility. If you rebuilt the app, the grant
 is gone even though the checkbox still looks on: reset it (step 4).
@@ -139,12 +145,14 @@ is gone even though the checkbox still looks on: reset it (step 4).
 **The app freezes for a second after I stop.** Expected with local models. They transcribe
 after the recording ends, not during.
 
-**Whisper writes text I never said.** Voice detection is meant to prevent this. Keep it on
-in Settings.
+**Whisper writes text I never said.** Recordings with no speech in them are refused before
+they reach the model, so this should not happen. If it does, the log line for that
+dictation shows the loudness it measured.
 
 **Anything else.** The log is at
-`~/Library/Application Support/omegawhisper/omegawhisper.log`. Switch on **Debug stats**
-in the menu to get a line of numbers per dictation.
+`~/Library/Application Support/omegawhisper/omegawhisper.log`. Switch on **Show debug
+stats**, in the menu bar or in Settings, to get live microphone numbers and a line of
+numbers per dictation.
 
 ## Development
 
@@ -152,6 +160,8 @@ in the menu to get a line of numbers per dictation.
 bun install
 bun tauri dev     # dev server + app
 bun run test      # Rust tests + frontend tests
+bun run test:rust # Rust only
+bun run test:web  # frontend only
 bun run dev       # frontend only, port 1420
 ```
 
