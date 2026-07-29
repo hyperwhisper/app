@@ -871,30 +871,6 @@ export function SettingsPage() {
                 </button>
               </div>
 
-              {/* Debug stats toggle */}
-              <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
-                <div>
-                  <span className="text-sm text-white">Show debug stats</span>
-                  <p className="text-xs text-white/40">Live microphone numbers, and one line per dictation</p>
-                </div>
-                <button
-                  onClick={() => {
-                    const next = !showDebugStats;
-                    setShowDebugStats(next);
-                    invoke("set_debug_stats", { enabled: next }).catch(() => {});
-                  }}
-                  className={`w-10 h-5 rounded-full transition-colors ${
-                    showDebugStats ? "bg-green-500" : "bg-white/20"
-                  }`}
-                >
-                  <div
-                    className={`w-4 h-4 rounded-full bg-white transition-transform ${
-                      showDebugStats ? "translate-x-5" : "translate-x-0.5"
-                    }`}
-                  />
-                </button>
-              </div>
-
               {/* Error message */}
               {modelError && (
                 <p className="text-xs text-red-400">
@@ -941,6 +917,37 @@ export function SettingsPage() {
                   Bottom
                 </button>
               </div>
+            </div>
+          </div>
+
+          {/* Diagnostics. Its own section: it has nothing to do with which
+              backend is chosen, and it lived under the local-only settings
+              where it vanished if you switched backend. */}
+          <div className="space-y-2">
+            <Label className="text-xs uppercase tracking-wide text-white/50">
+              Diagnostics
+            </Label>
+            <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg">
+              <div>
+                <span className="text-sm text-white">Show debug stats</span>
+                <p className="text-xs text-white/40">Live microphone numbers, and one line per dictation</p>
+              </div>
+              <button
+                onClick={() => {
+                  const next = !showDebugStats;
+                  setShowDebugStats(next);
+                  invoke("set_debug_stats", { enabled: next }).catch(() => {});
+                }}
+                className={`w-10 h-5 rounded-full transition-colors ${
+                  showDebugStats ? "bg-green-500" : "bg-white/20"
+                }`}
+              >
+                <div
+                  className={`w-4 h-4 rounded-full bg-white transition-transform ${
+                    showDebugStats ? "translate-x-5" : "translate-x-0.5"
+                  }`}
+                />
+              </button>
             </div>
           </div>
 
