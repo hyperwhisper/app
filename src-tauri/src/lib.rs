@@ -3,7 +3,7 @@ mod managers;
 mod resampler;
 
 use audio::VadProcessor;
-use chrono::Utc;
+use chrono::{Local, Utc};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, SampleFormat, SupportedStreamConfig};
 use managers::{
@@ -51,8 +51,8 @@ pub struct AudioState {
     use_vad: Arc<Mutex<bool>>,
     // forced language for local Whisper (None = auto-detect)
     transcription_language: Arc<Mutex<Option<String>>>,
-    // Return English text whatever language was spoken. Whisper models only.
-    translate_to_english: Arc<Mutex<bool>>,
+    // show the live microphone numbers and the per-dictation line
+    debug_stats: Arc<Mutex<bool>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -76,6 +76,41 @@ impl OmegawhisperDBus {
 struct TranscriptionEvent {
     text: String,
     is_final: bool,
+}
+
+// Live microphone numbers, sent to the indicator window while recording.
+// This is the audio the recording itself gets, not what the browser side
+// hears, so it shows whether the recording is picking up any sound at all.
+#[derive(Clone, serde::Serialize)]
+struct MicLevel {
+    // Loudest sample of the last chunk, 0.0 to 1.0.
+    peak: f32,
+    // Average level of the last chunk. Normal speech sits near 0.05.
+    rms: f32,
+    // Seconds since this recording started.
+    seconds: f32,
+    // Base frequency of the voice in Hz, 0 when it cannot be told.
+    pitch: f32,
+    // One value per frequency band, 0 to 1, for the bars the windows draw.
+    bands: Vec<f32>,
+}
+
+// What one finished local dictation did, shown in the main window so the
+// numbers behind a bad result are visible without reading a log file.
+#[derive(Clone, serde::Serialize)]
+struct DictationStats {
+    model: String,
+    language: String,
+    // Length of the audio handed to the model.
+    seconds: f32,
+    // Loudness of the spoken parts, before and after the level boost.
+    level_before: f32,
+    level_after: f32,
+    gain: f32,
+    // Seconds spent inside the model.
+    took: f32,
+    // Characters of text it returned. 0 means it returned nothing.
+    chars: usize,
 }
 
 // Trial key API response types
@@ -294,14 +329,17 @@ fn get_recordings_dir() -> Result<PathBuf, String> {
     Ok(recordings_dir)
 }
 
-// The language and translate choices live in the tray menu, which has no
+// The language choice lives in the tray menu, which has no
 // browser storage behind it, so they are kept in a small file next to the
 // models. Without this both reset to auto-detect on every restart.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 struct TrayPrefs {
     /// None means auto-detect.
     language: Option<String>,
-    translate_to_english: bool,
+    /// Live microphone numbers and the per-dictation line. Off unless asked
+    /// for; serde default keeps older settings files readable.
+    #[serde(default)]
+    debug_stats: bool,
 }
 
 fn tray_prefs_path() -> Option<PathBuf> {
@@ -807,6 +845,13 @@ fn get_use_vad(state: State<'_, AudioState>) -> bool {
     *state.use_vad.lock().unwrap()
 }
 
+// Asked by each window when it opens; after that the tray sends
+// "debug-stats-changed" when it is switched.
+#[tauri::command]
+fn get_debug_stats(state: State<'_, AudioState>) -> bool {
+    *state.debug_stats.lock().unwrap()
+}
+
 // Legacy check for backward compatibility with old settings page
 #[tauri::command]
 fn check_local_model_status(state: State<'_, AudioState>) -> Result<serde_json::Value, String> {
@@ -923,6 +968,336 @@ fn get_safe_input_config(device: &Device) -> Result<SupportedStreamConfig, Strin
 }
 
 // Convert audio data to WAV format bytes
+// Size of the spectrogram indicator window.
+const INDICATOR_W: f64 = 460.0;
+const INDICATOR_H: f64 = 200.0;
+
+// Put the indicator at the bottom centre of the screen the mouse is on, so
+// it appears on whichever display is being worked on.
+//
+// Screens share one coordinate space and only the main screen is guaranteed
+// to start at zero, so the monitor's own origin has to be added or the window
+// lands on another display. Called every time the indicator is shown rather
+// than once at startup, so plugging a monitor in or out, or changing
+// resolution, is picked up without restarting.
+#[tauri::command]
+fn position_indicator(app: AppHandle) {
+    use tauri::Manager;
+
+    let Some(win) = app.get_webview_window("indicator") else {
+        return;
+    };
+
+    // Fall back to the main screen if the pointer is somewhere with no
+    // monitor, which happens briefly while displays are being rearranged.
+    let monitor = app
+        .cursor_position()
+        .ok()
+        .and_then(|p| app.monitor_from_point(p.x, p.y).ok().flatten())
+        .or_else(|| win.primary_monitor().ok().flatten());
+    let monitor = match monitor {
+        Some(m) => m,
+        None => return,
+    };
+
+    let scale = monitor.scale_factor();
+    let origin_x = monitor.position().x as f64 / scale;
+    let origin_y = monitor.position().y as f64 / scale;
+    let screen_w = monitor.size().width as f64 / scale;
+    let screen_h = monitor.size().height as f64 / scale;
+
+    let x = origin_x + (screen_w - INDICATOR_W) / 2.0;
+    let y = origin_y + screen_h - INDICATOR_H - 90.0;
+
+    eprintln!(
+        "indicator: screen {:?} {:.0}x{:.0} at ({:.0},{:.0}), scale {} -> window at ({:.0},{:.0})",
+        monitor.name().map(|n| n.as_str()).unwrap_or("unnamed"),
+        screen_w,
+        screen_h,
+        origin_x,
+        origin_y,
+        scale,
+        x,
+        y
+    );
+
+    let _ = win.set_position(tauri::LogicalPosition::new(x, y));
+}
+
+// Loudness of what was sent to the model: the loudest sample, the average
+// level, and how much of it sits near silence. Quiet or mostly-silent audio
+// is the usual reason a dictation comes back wrong or invented.
+fn audio_stats(samples: &[f32]) -> (f32, f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0, 1.0);
+    }
+    let mut peak = 0.0f32;
+    let mut sum_squares = 0.0f64;
+    let mut quiet_samples = 0usize;
+    for &s in samples {
+        let level = s.abs();
+        if level > peak {
+            peak = level;
+        }
+        sum_squares += (s as f64) * (s as f64);
+        // about -40 dBFS, below which speech is unlikely to be understood
+        if level < 0.01 {
+            quiet_samples += 1;
+        }
+    }
+    let rms = (sum_squares / samples.len() as f64).sqrt() as f32;
+    (peak, rms, quiet_samples as f32 / samples.len() as f32)
+}
+
+// How many samples the drawing maths looks at, and how many bars come out.
+const FFT_SIZE: usize = 1024;
+const BAND_COUNT: usize = 64;
+
+// Loudness per frequency band, for the bars the windows draw.
+//
+// The bands are spaced logarithmically, so the voice range fills the width
+// instead of being squeezed into the left edge, and the result is in decibels,
+// because that is how loudness is heard. -90 dB comes out as 0 and -20 dB as 1.
+fn frequency_bands(samples: &[f32], fft: &std::sync::Arc<dyn rustfft::Fft<f32>>) -> Vec<f32> {
+    use rustfft::num_complex::Complex;
+
+    if samples.len() < FFT_SIZE {
+        return vec![0.0; BAND_COUNT];
+    }
+    let start = samples.len() - FFT_SIZE;
+
+    // A Hann window: without it the ends of the slice act like a step change
+    // and smear energy across every band.
+    let mut buffer: Vec<Complex<f32>> = samples[start..]
+        .iter()
+        .enumerate()
+        .map(|(i, &s)| {
+            let w = 0.5
+                - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (FFT_SIZE - 1) as f32).cos();
+            Complex::new(s * w, 0.0)
+        })
+        .collect();
+    fft.process(&mut buffer);
+
+    let bins = FFT_SIZE / 2;
+    let min_bin = 2.0f32;
+    let max_bin = (bins as f32) * 0.5;
+
+    (0..BAND_COUNT)
+        .map(|i| {
+            let pos = i as f32 / (BAND_COUNT - 1) as f32;
+            let bin = (min_bin * (max_bin / min_bin).powf(pos)).round() as usize;
+            let bin = bin.min(bins - 1);
+            let magnitude = buffer[bin].norm() / (bins as f32);
+            let db = 20.0 * (magnitude + 1e-9).log10();
+            ((db + 90.0) / 70.0).clamp(0.0, 1.0)
+        })
+        .collect()
+}
+
+// Base frequency of the voice, found by looking for the shortest delay after
+// which the wave repeats. 0 when the sound is too quiet or too noisy to tell -
+// a wrong number is worse than none.
+fn detect_pitch(samples: &[f32], sample_rate: u32) -> f32 {
+    let size = samples.len().min(2048);
+    if size < 512 {
+        return 0.0;
+    }
+    let window = &samples[samples.len() - size..];
+
+    let energy: f32 = window.iter().map(|s| s * s).sum();
+    let rms = (energy / size as f32).sqrt();
+    if rms < 0.004 {
+        return 0.0;
+    }
+
+    let min_lag = (sample_rate as f32 / 400.0) as usize; // highest voice
+    let max_lag = ((sample_rate as f32 / 70.0) as usize).min(size - 1); // lowest voice
+    let mut best_lag = 0usize;
+    let mut best = 0.0f32;
+    for lag in min_lag..=max_lag {
+        let mut sum = 0.0f32;
+        for i in 0..(size - lag) {
+            sum += window[i] * window[i + lag];
+        }
+        let score = sum / (size - lag) as f32;
+        if score > best {
+            best = score;
+            best_lag = lag;
+        }
+    }
+    // The repeat has to be at least a third as strong as the sound itself.
+    if best_lag == 0 || best < rms * rms * 0.33 {
+        return 0.0;
+    }
+    sample_rate as f32 / best_lag as f32
+}
+
+// Keep the newest few thousand samples for the drawing maths. Called from the
+// audio callback, so it does no more than a copy: enough for the frequency
+// bands and for finding the pitch, and nothing older.
+fn keep_recent(store: &Arc<Mutex<Vec<f32>>>, chunk: &[f32]) {
+    const KEEP: usize = 4096;
+    let Ok(mut recent) = store.lock() else { return };
+    recent.extend_from_slice(chunk);
+    if recent.len() > KEEP {
+        let drop = recent.len() - KEEP;
+        recent.drain(0..drop);
+    }
+}
+
+// Loudest sample and average level of one chunk, for the live meter.
+fn chunk_level(samples: &[f32]) -> (f32, f32) {
+    if samples.is_empty() {
+        return (0.0, 0.0);
+    }
+    let mut peak = 0.0f32;
+    let mut sum_squares = 0.0f32;
+    for &s in samples {
+        peak = peak.max(s.abs());
+        sum_squares += s * s;
+    }
+    (peak, (sum_squares / samples.len() as f32).sqrt())
+}
+
+// How loud the spoken parts are, ignoring pauses and one-off bangs.
+//
+// The recording is cut into 30 ms pieces, each piece's loudness is measured,
+// and the value 10% from the top is returned. Pauses sit at the bottom and a
+// single door slam sits in that top 10%, so neither decides the answer.
+// Normal close speech lands around 0.08 on this scale.
+fn speech_level(samples: &[f32]) -> f32 {
+    const FRAME: usize = 480; // 30 ms at 16 kHz
+
+    let mut levels: Vec<f32> = samples
+        .chunks(FRAME)
+        .filter(|c| c.len() == FRAME)
+        .map(|c| {
+            let sum: f32 = c.iter().map(|s| s * s).sum();
+            (sum / c.len() as f32).sqrt()
+        })
+        .collect();
+
+    if levels.is_empty() {
+        return 0.0;
+    }
+
+    levels.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    levels[(levels.len() as f32 * 0.9) as usize % levels.len()]
+}
+
+// Wall-clock time for the log, so a recording that nobody meant to start can
+// be matched against what was happening on screen at that moment.
+fn now() -> String {
+    Local::now().format("%H:%M:%S%.3f").to_string()
+}
+
+// Below these two, a recording holds no speech and must not be sent to the
+// model. Measured on the microphone audio, before any level boost. Speech
+// close to the microphone reaches a speech level of 0.08 and a peak near 0.5;
+// an empty room measured 0.0014 and 0.02.
+const MIN_SPEECH_LEVEL: f32 = 0.005;
+const MIN_SPEECH_PEAK: f32 = 0.05;
+
+// Cut the quiet head and tail off, keeping everything in between.
+//
+// Pressing the shortcut and starting to speak takes a few seconds, and those
+// seconds arrive as room noise. Whisper reads the recording as one block and
+// a long quiet opening makes it lose the first words. Only the two ends are
+// touched: a pause in the middle of a sentence is never cut, because cutting
+// there would join words that were seconds apart.
+//
+// Returns how many seconds were removed from the front.
+fn trim_quiet_edges(samples: &mut Vec<f32>) -> f32 {
+    const FRAME: usize = 480; // 30 ms at 16 kHz
+    const KEEP: usize = 16; // ~0.5 s of margin, so no word loses its start
+
+    let level = speech_level(samples);
+    if level <= 0.0 {
+        return 0.0;
+    }
+    // A quarter of the speaking level: quiet enough to catch a soft word,
+    // loud enough to ignore room noise.
+    let threshold = (level * 0.25).max(0.004);
+
+    let loud: Vec<bool> = samples
+        .chunks(FRAME)
+        .map(|c| {
+            let sum: f32 = c.iter().map(|s| s * s).sum();
+            (sum / c.len() as f32).sqrt() > threshold
+        })
+        .collect();
+
+    let Some(first) = loud.iter().position(|&x| x) else {
+        return 0.0;
+    };
+    let last = loud.iter().rposition(|&x| x).unwrap_or(loud.len() - 1);
+
+    let start = first.saturating_sub(KEEP) * FRAME;
+    let end = ((last + KEEP + 1) * FRAME).min(samples.len());
+    if start >= end {
+        return 0.0;
+    }
+
+    let cut_seconds = start as f32 / 16_000.0;
+    *samples = samples[start..end].to_vec();
+    cut_seconds
+}
+
+// Bring quiet recordings up to a level the model can work with.
+//
+// Whisper reads audio in 30 second windows and drops a whole window when it
+// is not sure the window holds speech. A quiet microphone makes that happen
+// again and again, so a long dictation comes back as a few sentences or as
+// nothing. Scaling the whole recording up avoids it. The saved microphone
+// recording is untouched; only what goes to the model is changed.
+//
+// The gain is chosen from the speech level, not the loudest sample, so long
+// pauses do not shrink it and one loud bang does not cancel it. The peak
+// still caps the gain, so nothing clips.
+//
+// Returns the gain applied, 1.0 meaning the audio was already loud enough.
+fn boost_quiet_audio(samples: &mut [f32]) -> f32 {
+    // Loudness of normal speech close to the microphone.
+    const TARGET_LEVEL: f32 = 0.08;
+    // Leave headroom so the loudest sample does not hit the ceiling.
+    const MAX_PEAK: f32 = 0.95;
+    // Past this the recording is being turned into something it was not.
+    // 40x used to be allowed, and it raised an empty room to speech loudness,
+    // which Whisper then read as sentences in Dutch.
+    const MAX_GAIN: f32 = 10.0;
+
+    let level = speech_level(samples);
+    let peak = samples.iter().fold(0.0f32, |max, s| max.max(s.abs()));
+    if level < MIN_SPEECH_LEVEL || peak <= 0.0 {
+        return 1.0;
+    }
+
+    let gain = (TARGET_LEVEL / level).min(MAX_PEAK / peak).min(MAX_GAIN);
+    if gain <= 1.0 {
+        return 1.0;
+    }
+
+    for s in samples.iter_mut() {
+        *s = (*s * gain).clamp(-1.0, 1.0);
+    }
+    gain
+}
+
+// Save the exact audio handed to the model, at 16kHz, so it can be listened
+// to afterwards. This is not the same as the saved recording: it is after
+// resampling and after voice detection has cut pieces out, which is the
+// whole point - it is what the model heard, not what the microphone heard.
+fn save_model_input(samples: &[f32]) -> Option<PathBuf> {
+    let dir = get_recordings_dir().ok()?;
+    let path = dir.join(format!(
+        "{}-model-input.wav",
+        Utc::now().format("%Y-%m-%d_%H-%M-%S")
+    ));
+    fs::write(&path, to_wav_bytes(samples, 16_000, 1)).ok()?;
+    Some(path)
+}
+
 fn to_wav_bytes(samples: &[f32], sample_rate: u32, channels: u16) -> Vec<u8> {
     let mut wav_data = Vec::new();
 
@@ -1326,6 +1701,7 @@ async fn start_recording(
             return Err("Already recording".to_string());
         }
     }
+    eprintln!("[{}] recording started", now());
 
     // Check if using local transcription
     let use_local = *state.use_local_transcription.lock().unwrap();
@@ -1368,7 +1744,6 @@ async fn start_recording(
     let use_vad = *state.use_vad.lock().unwrap();
 
     let transcription_language = state.transcription_language.lock().unwrap().clone();
-    let translate_to_english = *state.translate_to_english.lock().unwrap();
 
     // Clone transcription manager for the thread
     let transcription_manager = state.transcription_manager.0.clone();
@@ -1505,6 +1880,21 @@ async fn start_recording(
 
             // Transcription happens here after loop exits (either from stop signal or channel disconnect)
 
+            // Take whatever is still waiting in the channel. The loop above
+            // leaves the moment recording stops, so without this the last
+            // chunks captured - and any backlog, if resampling fell behind -
+            // would never reach the model.
+            while let Ok(samples) = audio_rx.try_recv() {
+                if let Ok(resampled) = resampler.process(&samples) {
+                    if let Some(ref mut vad) = vad_processor {
+                        let speech = vad.process(&resampled);
+                        all_audio.extend(speech);
+                    } else {
+                        all_audio.extend(resampled);
+                    }
+                }
+            }
+
             // Emit processing state
             let _ = app_handle_ws.emit("transcription-processing", ());
 
@@ -1530,20 +1920,124 @@ async fn start_recording(
                 // is exactly how long the app looks frozen after pressing the
                 // shortcut. Loading a model the first time is counted here too.
                 let audio_seconds = all_audio.len() as f32 / 16_000.0;
+                let (peak, rms, silence) = audio_stats(&all_audio);
+                let level_before = speech_level(&all_audio);
+
+                // Whisper does not return nothing when it is given silence -
+                // it invents sentences, sometimes in a language nobody spoke,
+                // and auto-type puts them straight into whatever app is in
+                // front. So silence never reaches the model.
+                if level_before < MIN_SPEECH_LEVEL || peak < MIN_SPEECH_PEAK {
+                    eprintln!(
+                        "dictation: skipped {:.1}s, no speech in it (speech={:.4} peak={:.3})",
+                        audio_seconds, level_before, peak
+                    );
+                    let _ = app_handle_ws.emit(
+                        "dictation-stats",
+                        DictationStats {
+                            model: "skipped - no speech".to_string(),
+                            language: transcription_language
+                                .clone()
+                                .unwrap_or_else(|| "auto".to_string()),
+                            seconds: audio_seconds,
+                            level_before,
+                            level_after: level_before,
+                            gain: 1.0,
+                            took: 0.0,
+                            chars: 0,
+                        },
+                    );
+                    let _ = app_handle_ws.emit(
+                        "transcription-error",
+                        format!(
+                            "These {:.0} seconds held no speech, so nothing was typed. If you \
+                             were speaking, the microphone is not reaching the app: check the \
+                             input volume in System Settings > Sound > Input and close other \
+                             apps holding the microphone (Teams, Zoom).",
+                            audio_seconds
+                        ),
+                    );
+                    let _ = app_handle_ws.emit("transcription-complete", ());
+                    return;
+                }
+
+                // Drop the quiet head and tail, then raise the level, then
+                // save, so the saved file is exactly what the model was given.
+                let trimmed = trim_quiet_edges(&mut all_audio);
+                let gain = boost_quiet_audio(&mut all_audio);
+                let level_after = speech_level(&all_audio);
+                let saved_input = save_model_input(&all_audio);
+
                 let started = std::time::Instant::now();
-                let result = {
+                let (result, model_id) = {
                     let mut manager = transcription_manager.lock().unwrap();
-                    manager.transcribe(
-                        &all_audio,
-                        transcription_language.clone(),
-                        translate_to_english,
-                    )
+                    let id = manager
+                        .get_loaded_model_id()
+                        .unwrap_or("none")
+                        .to_string();
+                    let r = manager.transcribe(&all_audio, transcription_language.clone());
+                    (r, id)
                 };
-                eprintln!(
-                    "Transcribed {:.1}s of audio in {:.1}s",
-                    audio_seconds,
-                    started.elapsed().as_secs_f32()
+                let took = started.elapsed().as_secs_f32();
+
+                // The same numbers as the log line below, sent to the main
+                // window, so a result can be judged without opening a log.
+                let _ = app_handle_ws.emit(
+                    "dictation-stats",
+                    DictationStats {
+                        model: model_id.clone(),
+                        language: transcription_language
+                            .clone()
+                            .unwrap_or_else(|| "auto".to_string()),
+                        seconds: audio_seconds,
+                        level_before,
+                        level_after,
+                        gain,
+                        took,
+                        chars: result.as_ref().map(|t| t.trim().chars().count()).unwrap_or(0),
+                    },
                 );
+
+                // Everything that differs between a good result and a bad one,
+                // on one line, so two dictations can be compared directly.
+                eprintln!(
+                    "[{}] dictation: model={} language={} vad={} audio={:.1}s \
+                     peak={:.2} rms={:.3} silence={:.0}% trimmed={:.1}s \
+                     speech={:.4}->{:.4} gain={:.1}x took={:.1}s",
+                    now(),
+                    model_id,
+                    transcription_language.as_deref().unwrap_or("auto"),
+                    use_vad,
+                    audio_seconds,
+                    peak,
+                    rms,
+                    silence * 100.0,
+                    trimmed,
+                    level_before,
+                    level_after,
+                    gain,
+                    took
+                );
+                if let Some(path) = saved_input {
+                    eprintln!("  what the model heard: {}", path.display());
+                }
+
+                // A microphone this quiet cannot be rescued by raising the
+                // level, and the model will return little or nothing. Say so,
+                // otherwise a long dictation just disappears with no reason
+                // given. 0.02 is about a quarter of normal speech loudness.
+                if level_after < 0.02 {
+                    let _ = app_handle_ws.emit(
+                        "transcription-error",
+                        format!(
+                            "The microphone was almost silent for these {:.0} seconds, so most \
+                             of the speech could not be read. Check the input volume in System \
+                             Settings > Sound > Input, speak closer to the microphone, and close \
+                             other apps holding the microphone (Teams, Zoom).",
+                            audio_seconds
+                        ),
+                    );
+                }
 
                 match result {
                     Ok(text) => {
@@ -1556,7 +2050,17 @@ async fn start_recording(
                                 eprintln!("Auto-typing {} characters: {:?}", text.chars().count(), text);
                                 if let Err(e) = type_text_internal(&format!("{} ", text)) {
                                     eprintln!("Auto-type failed: {}", e);
+                                    // Typing was refused, so hand the text to
+                                    // the clipboard instead. A minute of speech
+                                    // must never end up nowhere.
+                                    let _ = app_handle_ws.emit("auto-type-failed", &text);
+                                    let _ = app_handle_ws.emit("transcription-error", e);
                                 }
+                            } else {
+                                eprintln!(
+                                    "Auto-type is off: {} characters went to the window only.",
+                                    text.chars().count()
+                                );
                             }
                             let event = TranscriptionEvent {
                                 text,
@@ -1724,6 +2228,55 @@ async fn start_recording(
         });
     } // End of if use_local else block
 
+    // Newest microphone level and the most recent samples, written by the
+    // capture callback and read by the thread below. The callback must not
+    // wait on anything, so it only stores data here and never talks to the UI
+    // itself, and never does the frequency maths.
+    let mic_level = Arc::new(Mutex::new((0.0f32, 0.0f32)));
+    let mic_recent = Arc::new(Mutex::new(Vec::<f32>::new()));
+
+    // Everything the windows draw comes from here, 20 times a second. The
+    // windows used to open the microphone themselves to draw with, which is
+    // what made macOS wind the recording's gain up over the first seconds.
+    {
+        let mic_level = mic_level.clone();
+        let mic_recent = mic_recent.clone();
+        let is_recording = is_recording_arc.clone();
+        let app_handle_level = app_handle.clone();
+        thread::spawn(move || {
+            let mut planner = rustfft::FftPlanner::<f32>::new();
+            let fft = planner.plan_fft_forward(FFT_SIZE);
+            let started = std::time::Instant::now();
+            let mut tick = 0u32;
+            let mut pitch = 0.0f32;
+
+            while *is_recording.lock().unwrap() {
+                let (peak, rms) = *mic_level.lock().unwrap();
+                let recent = mic_recent.lock().unwrap().clone();
+
+                let bands = frequency_bands(&recent, &fft);
+                // Pitch costs more than the rest put together, so it runs 5
+                // times a second rather than 20.
+                if tick % 4 == 0 {
+                    pitch = detect_pitch(&recent, sample_rate);
+                }
+                tick += 1;
+
+                let _ = app_handle_level.emit(
+                    "mic-level",
+                    MicLevel {
+                        peak,
+                        rms,
+                        seconds: started.elapsed().as_secs_f32(),
+                        pitch,
+                        bands,
+                    },
+                );
+                thread::sleep(Duration::from_millis(50));
+            }
+        });
+    }
+
     // Spawn audio recording thread
     thread::spawn(move || {
         let stream_result = match sample_format {
@@ -1731,6 +2284,8 @@ async fn start_recording(
                 let is_recording = is_recording_arc.clone();
                 let recorded_samples = recorded_samples_arc.clone();
                 let audio_tx = audio_tx.clone();
+                let mic_level = mic_level.clone();
+                let mic_recent = mic_recent.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
@@ -1747,6 +2302,8 @@ async fn start_recording(
                             }
                             // Store for WAV file
                             recorded_samples.lock().unwrap().extend_from_slice(&buffer);
+                            *mic_level.lock().unwrap() = chunk_level(&buffer);
+                            keep_recent(&mic_recent, &buffer);
                             // Send to WebSocket thread
                             let _ = audio_tx.send(buffer);
                         }
@@ -1761,6 +2318,8 @@ async fn start_recording(
                 let is_recording = is_recording_arc.clone();
                 let recorded_samples = recorded_samples_arc.clone();
                 let audio_tx = audio_tx.clone();
+                let mic_level = mic_level.clone();
+                let mic_recent = mic_recent.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
@@ -1775,6 +2334,8 @@ async fn start_recording(
                                 buffer = mono_data;
                             }
                             recorded_samples.lock().unwrap().extend_from_slice(&buffer);
+                            *mic_level.lock().unwrap() = chunk_level(&buffer);
+                            keep_recent(&mic_recent, &buffer);
                             let _ = audio_tx.send(buffer);
                         }
                     },
@@ -1788,6 +2349,8 @@ async fn start_recording(
                 let is_recording = is_recording_arc.clone();
                 let recorded_samples = recorded_samples_arc.clone();
                 let audio_tx = audio_tx.clone();
+                let mic_level = mic_level.clone();
+                let mic_recent = mic_recent.clone();
                 device.build_input_stream(
                     &stream_config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
@@ -1802,6 +2365,8 @@ async fn start_recording(
                                 buffer = mono_data;
                             }
                             recorded_samples.lock().unwrap().extend_from_slice(&buffer);
+                            *mic_level.lock().unwrap() = chunk_level(&buffer);
+                            keep_recent(&mic_recent, &buffer);
                             let _ = audio_tx.send(buffer);
                         }
                     },
@@ -1844,6 +2409,8 @@ async fn stop_recording(state: State<'_, AudioState>, _app_handle: AppHandle) ->
             return Err("Not recording".to_string());
         }
     }
+
+    eprintln!("[{}] recording stopped", now());
 
     // Stop recording
     *state.is_recording.lock().unwrap() = false;
@@ -1985,7 +2552,43 @@ fn get_keybinding() -> Option<String> {
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+// Everything the app prints goes to one file, whatever started it - Finder,
+// the tray, or a terminal. Launched from Finder there is no terminal to print
+// to, so a dictation that went wrong used to leave no trace at all.
+#[cfg(unix)]
+fn redirect_output_to_log() {
+    let Some(dir) = dirs::data_local_dir() else {
+        return;
+    };
+    let path = dir.join("omegawhisper").join("omegawhisper.log");
+    if let Some(parent) = path.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+
+    // Start over once the file gets big rather than growing without end.
+    if fs::metadata(&path).map(|m| m.len() > 5_000_000).unwrap_or(false) {
+        let _ = fs::remove_file(&path);
+    }
+
+    let Ok(file) = fs::OpenOptions::new().create(true).append(true).open(&path) else {
+        return;
+    };
+    use std::os::unix::io::AsRawFd;
+    unsafe {
+        libc::dup2(file.as_raw_fd(), libc::STDOUT_FILENO);
+        libc::dup2(file.as_raw_fd(), libc::STDERR_FILENO);
+    }
+    // The file must outlive this function: the two descriptors above now
+    // point at it and closing it here would close them too.
+    std::mem::forget(file);
+
+    eprintln!("\n===== started {} =====", Local::now().format("%F %H:%M:%S"));
+}
+
 pub fn run() {
+    #[cfg(unix)]
+    redirect_output_to_log();
+
     // Rename the old data folder before any code reads or creates it.
     migrate_legacy_data_dir();
 
@@ -2002,7 +2605,51 @@ pub fn run() {
         );
     }
 
-    // Language and translate choices from the last run.
+    // Ask for the microphone now, not at the first F3.
+    //
+    // macOS asks the moment an app first opens the microphone. That used to be
+    // in the middle of the first dictation: the permission window appeared,
+    // took the keyboard away, and the first seconds of speech were lost. This
+    // opens the microphone for a moment at startup so the question is asked
+    // and answered before any recording. The permission is tied to the app's
+    // signature, so a rebuilt app is a new app to macOS and is asked again.
+    thread::spawn(|| {
+        let device = match get_input_device() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("Microphone check: no input device ({})", e);
+                return;
+            }
+        };
+        let config = match get_safe_input_config(&device) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("Microphone check: no usable input format ({})", e);
+                return;
+            }
+        };
+        let stream = device.build_input_stream_raw(
+            &config.config(),
+            config.sample_format(),
+            |_, _| {},
+            |e| eprintln!("Microphone check: {}", e),
+            None,
+        );
+        match stream {
+            Ok(s) => {
+                let _ = s.play();
+                thread::sleep(Duration::from_millis(300));
+                eprintln!("Microphone permission: granted (recording can work).");
+            }
+            Err(e) => eprintln!(
+                "Microphone permission: NOT granted or device unusable ({}). \
+                 Allow Omegawhisper in System Settings > Privacy & Security > Microphone.",
+                e
+            ),
+        }
+    });
+
+    // Language choice from the last run.
     let saved_prefs = load_tray_prefs();
 
     // Initialize model manager
@@ -2033,7 +2680,7 @@ pub fn run() {
         // Keep speech only. Feeding silence to Whisper makes it invent text.
         use_vad: Arc::new(Mutex::new(true)),
         transcription_language: Arc::new(Mutex::new(saved_prefs.language.clone())),
-        translate_to_english: Arc::new(Mutex::new(saved_prefs.translate_to_english)),
+        debug_stats: Arc::new(Mutex::new(saved_prefs.debug_stats)),
     };
 
     tauri::Builder::default()
@@ -2044,6 +2691,7 @@ pub fn run() {
                 .with_handler(|app, _shortcut, event| {
                     use tauri_plugin_global_shortcut::ShortcutState;
                     if event.state() == ShortcutState::Pressed {
+                        eprintln!("[{}] F3 pressed", now());
                         let _ = app.emit("recording-toggled", ());
                     }
                 })
@@ -2084,6 +2732,8 @@ pub fn run() {
             set_use_vad,
             get_use_vad,
             get_keybinding,
+            position_indicator,
+            get_debug_stats,
         ])
         .setup(|app| {
             // F3 toggles recording from anywhere.
@@ -2139,14 +2789,16 @@ pub fn run() {
                 let lang_menu =
                     Submenu::with_items(app, "Language", true, &[&lang_auto, &lang_en, &lang_bg])?;
 
-                // Speak any language, get English text. Whisper models only.
-                let saved_translate = *app.state::<AudioState>().translate_to_english.lock().unwrap();
-                let translate_item = CheckMenuItem::with_id(
+                // Live microphone numbers on the indicator and the line under
+                // the text. Useful when a dictation goes wrong, noise the rest
+                // of the time, so it stays off until asked for.
+                let saved_debug = *app.state::<AudioState>().debug_stats.lock().unwrap();
+                let debug_item = CheckMenuItem::with_id(
                     app,
-                    "translate_english",
-                    "Translate to English",
+                    "debug_stats",
+                    "Show debug stats",
                     true,
-                    saved_translate,
+                    saved_debug,
                     None::<&str>,
                 )?;
 
@@ -2160,14 +2812,14 @@ pub fn run() {
                         &settings_item,
                         &hide_item,
                         &lang_menu,
-                        &translate_item,
+                        &debug_item,
                         &sep,
                         &quit_item,
                     ],
                 )?;
 
                 let (la, le, lb) = (lang_auto.clone(), lang_en.clone(), lang_bg.clone());
-                let tr = translate_item.clone();
+                let debug_check = debug_item.clone();
 
                 let mut tray = TrayIconBuilder::new()
                     .menu(&menu)
@@ -2251,23 +2903,27 @@ pub fn run() {
                             let _ = le.set_checked(language.as_deref() == Some("en"));
                             let _ = lb.set_checked(language.as_deref() == Some("bg"));
 
+                            let state = app.state::<AudioState>();
+                            let debug_stats = *state.debug_stats.lock().unwrap();
                             save_tray_prefs(&TrayPrefs {
                                 language,
-                                translate_to_english: *state.translate_to_english.lock().unwrap(),
+                                debug_stats,
                             });
                         }
-                        "translate_english" => {
+                        "debug_stats" => {
                             let state = app.state::<AudioState>();
                             let enabled = {
-                                let mut flag = state.translate_to_english.lock().unwrap();
+                                let mut flag = state.debug_stats.lock().unwrap();
                                 *flag = !*flag;
                                 *flag
                             };
-                            let _ = tr.set_checked(enabled);
+                            let _ = debug_check.set_checked(enabled);
+                            let _ = app.emit("debug-stats-changed", enabled);
 
+                            let language = state.transcription_language.lock().unwrap().clone();
                             save_tray_prefs(&TrayPrefs {
-                                language: state.transcription_language.lock().unwrap().clone(),
-                                translate_to_english: enabled,
+                                language,
+                                debug_stats: enabled,
                             });
                         }
                         "quit" => app.exit(0),
@@ -2294,8 +2950,8 @@ pub fn run() {
             {
                 use tauri::{WebviewUrl, WebviewWindowBuilder};
 
-                let ind_w = 460.0;
-                let ind_h = 200.0;
+                let ind_w = INDICATOR_W;
+                let ind_h = INDICATOR_H;
                 match WebviewWindowBuilder::new(
                     app,
                     "indicator",
@@ -2307,22 +2963,20 @@ pub fn run() {
                 .transparent(true)
                 .always_on_top(true)
                 .skip_taskbar(true)
+                // focused(false) only covers the moment it is built. focusable
+                // (false) is what stops it taking the keyboard away from the
+                // app you are dictating into every time it is shown.
                 .focused(false)
+                .focusable(false)
                 .resizable(false)
                 .shadow(false)
                 .visible(false)
                 .build()
                 {
-                    Ok(win) => {
-                        // bottom-center of the primary screen
-                        if let Ok(Some(monitor)) = win.primary_monitor() {
-                            let scale = monitor.scale_factor();
-                            let sw = monitor.size().width as f64 / scale;
-                            let sh = monitor.size().height as f64 / scale;
-                            let x = (sw - ind_w) / 2.0;
-                            let y = sh - ind_h - 90.0;
-                            let _ = win.set_position(tauri::LogicalPosition::new(x, y));
-                        }
+                    Ok(_) => {
+                        // Placed by position_indicator, which runs again every
+                        // time the window is shown.
+                        position_indicator(app.handle().clone());
                     }
                     Err(e) => eprintln!("Failed to create indicator window: {}", e),
                 }

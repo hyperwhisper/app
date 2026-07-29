@@ -15,19 +15,18 @@ enum LoadedEngine {
 impl LoadedEngine {
     /// Transcribe audio samples (expects 16kHz mono f32 audio).
     /// Samples go straight to the engine - no temp WAV file needed.
-    fn transcribe(
-        &mut self,
-        samples: &[f32],
-        language: Option<String>,
-        translate: bool,
-    ) -> Result<String, String> {
+    fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
         let result = match self {
             LoadedEngine::Whisper(engine) => {
-                // translate makes Whisper output English whatever was spoken.
-                // Only Whisper can do this; the other engines ignore it.
+                // no_speech_thold is whisper.cpp's own default of 0.6, not the
+                // 0.2 that transcribe-rs sets. Whisper reads audio in 30 second
+                // windows and throws a whole window away when the chance of it
+                // being speech is below this number. At 0.2 a quiet microphone
+                // loses most windows, which is why a long dictation came back
+                // as only its last few sentences, or as nothing at all.
                 let params = WhisperInferenceParams {
                     language,
-                    translate,
+                    no_speech_thold: 0.6,
                     ..Default::default()
                 };
                 engine
@@ -157,19 +156,13 @@ impl TranscriptionManager {
     }
 
     /// Transcribe 16kHz mono f32 audio. `language` None = auto-detect.
-    /// `translate` true returns English text whatever language was spoken.
-    pub fn transcribe(
-        &mut self,
-        samples: &[f32],
-        language: Option<String>,
-        translate: bool,
-    ) -> Result<String, String> {
+    pub fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
         let engine = self
             .loaded_engine
             .as_mut()
             .ok_or("No model loaded")?;
 
-        engine.transcribe(samples, language, translate)
+        engine.transcribe(samples, language)
     }
 
 }

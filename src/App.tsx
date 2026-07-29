@@ -5,10 +5,23 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { useTrialKey } from "@/hooks/use-trial-key";
+import { db } from "@/lib/audio-level";
 
 interface TranscriptionEvent {
   text: string;
   is_final: boolean;
+}
+
+// Numbers behind one finished local dictation, sent by Rust after each run.
+interface DictationStats {
+  model: string;
+  language: string;
+  seconds: number;
+  level_before: number;
+  level_after: number;
+  gain: number;
+  took: number;
+  chars: number;
 }
 
 // Parse keybinding from dconf format (e.g., "<Super>m") to readable format (e.g., "Super+m")
@@ -36,6 +49,8 @@ function App() {
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [stats, setStats] = useState<DictationStats | null>(null);
+  const [showStats, setShowStats] = useState(false);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [apiKey] = useState(
     () => localStorage.getItem("deepgram_api_key") || ""
@@ -78,63 +93,22 @@ function App() {
 
   // Note: Hyperwhisper server settings are managed by useTrialKey hook
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const animationRef = useRef<number | null>(null);
   const finalTextRef = useRef<string>("");
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const microphoneRef = useRef<MediaStream | null>(null);
 
   // Animated waveform state
   const [barHeights, setBarHeights] = useState<number[]>([]);
-  const waveformAnimationRef = useRef<number | null>(null);
-  const barCount = 160;
 
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
     finalTextRef.current = finalText;
   }, [finalText]);
 
-  // Generate waveform heights - higher in the middle, lower at edges with random variation
-  const generateWaveformHeights = useCallback(() => {
-    const heights: number[] = [];
-    for (let i = 0; i < barCount; i++) {
-      const centerDistance = Math.abs(i - barCount / 2) / (barCount / 2);
-      const baseHeight = (1 - centerDistance * 0.7) * 100;
-      const randomVariation = Math.random() * 40 - 20;
-      heights.push(Math.max(8, Math.min(100, baseHeight + randomVariation)));
-    }
-    return heights;
-  }, [barCount]);
-
-  // Animate waveform when recording
-  const animateWaveform = useCallback(() => {
-    setBarHeights(generateWaveformHeights());
-    waveformAnimationRef.current = requestAnimationFrame(() => {
-      setTimeout(animateWaveform, 80);
-    });
-  }, [generateWaveformHeights]);
-
-  const stopWaveformAnimation = useCallback(() => {
-    if (waveformAnimationRef.current) {
-      cancelAnimationFrame(waveformAnimationRef.current);
-      waveformAnimationRef.current = null;
-    }
-  }, []);
-
-  // Start/stop waveform animation based on recording state
+  // Clear the bars when a recording ends, so the last shape does not stay
+  // frozen on screen. While recording they are filled from the "mic-level"
+  // listener further down, with the real audio.
   useEffect(() => {
-    if (isRecording) {
-      setBarHeights(generateWaveformHeights());
-      animateWaveform();
-    } else {
-      stopWaveformAnimation();
-    }
-
-    return () => {
-      stopWaveformAnimation();
-    };
-  }, [isRecording, animateWaveform, stopWaveformAnimation, generateWaveformHeights]);
+    if (!isRecording) setBarHeights([]);
+  }, [isRecording]);
 
   // Save API key to localStorage and send to backend
   useEffect(() => {
@@ -319,6 +293,48 @@ function App() {
     };
   }, [playCompletionTone]);
 
+  // What the last dictation did, shown as one line under the text.
+  useEffect(() => {
+    const unlisten = listen<DictationStats>("dictation-stats", (event) => {
+      setStats(event.payload);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
+  // Typing into the other app was refused. Put the text in the clipboard so a
+  // long dictation is still one paste away, and say so.
+  useEffect(() => {
+    const unlisten = listen<string>("auto-type-failed", (event) => {
+      navigator.clipboard
+        .writeText(event.payload)
+        .then(() =>
+          showToast("Typing is blocked. Text copied - press Cmd+V.", "info")
+        )
+        .catch(() => {});
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, [showToast]);
+
+  // The debug stats line is off unless switched on in the tray menu.
+  useEffect(() => {
+    invoke<boolean>("get_debug_stats")
+      .then(setShowStats)
+      .catch(() => {});
+    const unlisten = listen<boolean>("debug-stats-changed", (event) => {
+      setShowStats(event.payload);
+    });
+
+    return () => {
+      unlisten.then((fn) => fn());
+    };
+  }, []);
+
   // Listen for transcription errors (e.g., auth failure, connection issues)
   useEffect(() => {
     const unlisten = listen<string>("transcription-error", (event) => {
@@ -356,6 +372,9 @@ function App() {
       const indicator = await WebviewWindow.getByLabel("indicator");
       if (!indicator) return;
       if (shouldShow) {
+        // Re-centre first: the screen it belongs on may have been added,
+        // removed or resized since the last time it was shown.
+        await invoke("position_indicator");
         await indicator.show();
       } else {
         await indicator.hide();
@@ -363,109 +382,25 @@ function App() {
     })().catch(() => {});
   }, [isRecording, isProcessing]);
 
-  // Real-time waveform visualization during recording
-  const startRealTimeWaveform = useCallback(async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      microphoneRef.current = stream;
-
-      const audioContext = new AudioContext();
-      audioContextRef.current = audioContext;
-      const analyser = audioContext.createAnalyser();
-      analyser.fftSize = 256;
-      analyserRef.current = analyser;
-
-      const source = audioContext.createMediaStreamSource(stream);
-      source.connect(analyser);
-
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
-
-      const draw = () => {
-        const canvas = canvasRef.current;
-        if (!canvas) {
-          console.log("No canvas");
-          return;
-        }
-        if (!analyserRef.current) {
-          console.log("No analyser");
-          return;
-        }
-
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-
-        analyserRef.current.getByteFrequencyData(dataArray);
-
-        const width = canvas.width;
-        const height = canvas.height;
-
-        ctx.clearRect(0, 0, width, height);
-
-        const isDark = document.documentElement.classList.contains("dark");
-        const barColor = isDark ? "hsl(186, 100%, 50%)" : "hsl(221, 83%, 53%)";
-
-        // Draw waveform as slim bars centered vertically
-        const barWidth = 2;
-        const gap = 3;
-        const totalBars = 48;
-        const totalWidth = totalBars * (barWidth + gap) - gap;
-        const startX = (width - totalWidth) / 2;
-        const step = Math.floor(dataArray.length / totalBars);
-
-        for (let i = 0; i < totalBars; i++) {
-          const dataIndex = i * step;
-          const value = dataArray[dataIndex] || 0;
-          // Min height of 4px, max of 90% canvas height
-          const minHeight = 4;
-          const barHeight = Math.max(minHeight, (value / 255) * height * 0.9);
-          const x = startX + i * (barWidth + gap);
-          const y = (height - barHeight) / 2;
-
-          ctx.fillStyle = barColor;
-          ctx.fillRect(x, y, barWidth, barHeight);
-        }
-
-        animationRef.current = requestAnimationFrame(draw);
-      };
-
-      draw();
-    } catch (err) {
-      console.error("Error accessing microphone for waveform:", err);
-    }
-  }, [isRecording]);
-
-  const stopRealTimeWaveform = useCallback(() => {
-    if (animationRef.current) {
-      cancelAnimationFrame(animationRef.current);
-      animationRef.current = null;
-    }
-    if (microphoneRef.current) {
-      microphoneRef.current.getTracks().forEach((track) => track.stop());
-      microphoneRef.current = null;
-    }
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-    analyserRef.current = null;
-
-    // Clear canvas
-    const canvas = canvasRef.current;
-    if (canvas) {
-      const ctx = canvas.getContext("2d");
-      if (ctx) {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-      }
-    }
-  }, []);
-
-  // The hidden main window does not open its own mic; the indicator window
-  // handles the visualization (a second mic stream garbled the recording).
+  // The bars while recording come from Rust, from the audio being recorded.
+  // Neither window may open the microphone itself: WebKit ignores the "raw
+  // stream" constraints, which puts the device into processed mode and makes
+  // macOS wind its gain up over the first seconds of every recording.
   useEffect(() => {
+    const unlisten = listen<{ bands: number[] }>("mic-level", (event) => {
+      const bands = event.payload.bands ?? [];
+      // 48 bars across, each 4% to 100% tall.
+      const bars = Array.from({ length: 48 }, (_, i) => {
+        const value = bands[Math.floor((i * bands.length) / 48)] ?? 0;
+        return Math.max(4, value * 100);
+      });
+      setBarHeights(bars);
+    });
+
     return () => {
-      stopRealTimeWaveform();
+      unlisten.then((fn) => fn());
     };
-  }, [isRecording, startRealTimeWaveform, stopRealTimeWaveform]);
+  }, []);
 
   // Start recording
   const startRecording = async () => {
@@ -520,8 +455,10 @@ function App() {
     }
 
     try {
-      setFinalText("");
-
+      // The text from earlier dictations stays. It used to be wiped here, so
+      // starting a second recording erased what the first one had produced -
+      // and if that second one came back empty, the text was gone for good.
+      // Use the clear button to empty the box.
       await invoke("set_auto_type_transcription", { enabled: autoTypeEnabled });
 
       // Clear any previous error
@@ -766,6 +703,22 @@ function App() {
             ))}
           </div>
         )}
+        {/* What the last dictation did. Kept on screen because the useful
+            case is the one where no text came back at all. */}
+        {showStats && stats && !isRecording && (
+          <div
+            className={`absolute bottom-2 left-4 text-[10px] font-mono ${
+              stats.chars === 0 ? "text-red-400/70" : "text-white/35"
+            }`}
+            title={`${stats.model}, language ${stats.language}, level before boost ${db(
+              stats.level_before
+            )} dB`}
+          >
+            {stats.seconds.toFixed(1)}s · {db(stats.level_after)} dB · gain{" "}
+            {stats.gain.toFixed(1)}x · {stats.took.toFixed(1)}s ·{" "}
+            {stats.chars} chars
+          </div>
+        )}
         {/* Copy button - bottom right of waveform area */}
         {finalText && !isRecording && (
           <button
@@ -790,6 +743,24 @@ function App() {
                 <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
               </svg>
             )}
+          </button>
+        )}
+        {/* Empty the box. Dictations pile up until this is pressed. */}
+        {finalText && !isRecording && (
+          <button
+            onMouseDown={(e) => {
+              e.stopPropagation();
+              e.preventDefault();
+              setFinalText("");
+            }}
+            className="absolute bottom-2 right-12 p-1 text-white/40 hover:text-white/80 transition-colors"
+            title="Clear the text"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M3 6h18" />
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+              <path d="M10 11v6M14 11v6" />
+            </svg>
           </button>
         )}
       </div>

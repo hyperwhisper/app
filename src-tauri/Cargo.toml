@@ -38,6 +38,11 @@ rubato = "0.15"
 clap = { version = "4", features = ["derive"] }
 # Multi-model local transcription
 transcribe-rs = { version = "0.3", features = ["onnx", "whisper-cpp"] }
+# Turns the recorded audio into the bars the windows draw. The windows used to
+# open the microphone themselves for this, which put the device into processed
+# mode and made macOS wind its gain up over the first seconds of every
+# recording - the first words were nearly inaudible.
+rustfft = "6"
 # Note: silero-vad-rs has ort version conflict with transcribe-rs, using simple energy-based VAD instead
 
 [dependencies.async-trait]
@@ -46,6 +51,11 @@ version = "0.1"
 [dependencies.tokio]
 version = "1"
 features = ["sync", "rt-multi-thread", "macros", "time"]
+
+
+[target.'cfg(unix)'.dependencies]
+# Only for dup2, to point the app's own output at its log file.
+libc = "0.2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 # Posts typed text as Unicode key events. Version matches the copy Tauri
