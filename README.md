@@ -47,6 +47,9 @@ Transcription runs three ways:
 
 There are no prebuilt macOS releases. You build it yourself. Tested on Apple Silicon.
 
+Six steps. Step 5 grants macOS permissions — the app cannot type anything until you do it,
+so do not stop after the build.
+
 ### 1. Install the build tools
 
 ```sh
@@ -58,24 +61,39 @@ brew install cmake                                              # builds whisper
 
 CMake is not optional. Without it the build fails while compiling `whisper-rs-sys`.
 
-### 2. Build
+### 2. Get the code and the Tauri CLI
 
 ```sh
 git clone https://github.com/webtemp/omegawhisper.git
 cd omegawhisper
 bun install
-bun tauri build --bundles app
 ```
 
-`bun install` is not optional either — the `tauri` command comes from a devDependency, so
-without it step 4 fails with "command not found".
+`bun install` is what installs the Tauri CLI — it is a devDependency, not something you
+install globally. Check it worked before going on:
+
+```sh
+bun run tauri --version     # should print: tauri-cli 2.x.x
+```
+
+If that says "command not found", install it into the project by hand and try again:
+
+```sh
+bun add -D @tauri-apps/cli
+```
+
+### 3. Build
+
+```sh
+bun run tauri build --bundles app
+```
 
 The first build compiles whisper.cpp and ONNX Runtime from source and takes a while.
 Later builds are much faster.
 
 Result: `src-tauri/target/release/bundle/macos/Omegawhisper.app`
 
-### 3. Copy it to Applications
+### 4. Copy it to Applications
 
 ```sh
 cp -R src-tauri/target/release/bundle/macos/Omegawhisper.app /Applications/
@@ -90,25 +108,46 @@ can leave it half-deleted:
 rsync -a --delete src-tauri/target/release/bundle/macos/Omegawhisper.app/ /Applications/Omegawhisper.app/
 ```
 
-### 4. Grant permissions
+### 5. Grant permissions — do not skip this
 
-- **Microphone** — macOS asks the first time you record.
-- **Accessibility** — needed to type into other apps. Open
-  `System Settings` → `Privacy & Security` → `Accessibility`, add
-  `/Applications/Omegawhisper.app`, and switch it on.
+> [!IMPORTANT]
+> **Without Accessibility, the app does nothing useful.** It will record you, transcribe
+> you, and then fail to type a single character — with no error message. If you only do
+> one thing from this whole page, do this.
 
-These builds are unsigned, so **every rebuild throws the Accessibility grant away**.
-After each build, reset it and add the app again:
+**Accessibility** is what lets the app type into other apps. Turn it on:
+
+```sh
+open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+```
+
+Then add `/Applications/Omegawhisper.app` to the list and switch the toggle on.
+
+**Microphone** needs nothing from you now — macOS asks the first time you record. Say yes.
+
+#### After every rebuild, do it again
+
+These builds are unsigned, so macOS treats each new build as a different app and
+**throws the Accessibility grant away**. The nasty part: the toggle still looks switched
+on, so it appears fine while typing silently fails.
+
+Every time you rebuild, run this and add the app back:
 
 ```sh
 tccutil reset Accessibility dev.omegawhisper
 open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
 ```
 
-### 5. Pick a backend
+### 6. Pick a backend
 
-Open **Settings** from the menu-bar icon. To run offline, choose a local model and
-download it there — models are 80 MB to 1.6 GB.
+Open **Settings** from the menu-bar icon.
+
+To run offline, download a local model there. **Whisper Turbo** is the one to start with:
+it is the best mix of speed and accuracy on the Mac GPU, and it handles any language.
+Whisper Small is smaller and quicker if you are short of disk space; Whisper Large is more
+accurate but noticeably slower. Parakeet and Moonshine are English only.
+
+Models are 80 MB to 1.6 GB, so the first download takes a moment.
 
 The microphone is always the system default input. The device list in Settings is Linux
 code and does nothing on macOS; change the input in System Settings → Sound.
@@ -140,7 +179,7 @@ off. Open the main window — startup problems appear there as a message. Pick a
 key in Settings → Dictation key.
 
 **Text is transcribed but never typed.** Accessibility. If you rebuilt the app, the grant
-is gone even though the checkbox still looks on: reset it (step 4).
+is gone even though the checkbox still looks on: reset it (step 5).
 
 **The app freezes for a second after I stop.** Expected with local models. They transcribe
 after the recording ends, not during.
@@ -158,14 +197,14 @@ numbers per dictation.
 
 ```sh
 bun install
-bun tauri dev     # dev server + app
+bun run tauri dev # dev server + app
 bun run test      # Rust tests + frontend tests
 bun run test:rust # Rust only
 bun run test:web  # frontend only
 bun run dev       # frontend only, port 1420
 ```
 
-Regenerating the icons: `bun tauri icon logo.png`
+Regenerating the icons: `bun run tauri icon logo.png`
 
 ```
 src/                       React 19 frontend
@@ -236,7 +275,7 @@ sudo usermod -aG input $USER
 
 ```sh
 bun install
-bun tauri build     # .deb, .rpm, .AppImage in src-tauri/target/release/bundle/
+bun run tauri build # .deb, .rpm, .AppImage in src-tauri/target/release/bundle/
 nix build           # NixOS
 ```
 
