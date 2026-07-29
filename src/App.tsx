@@ -81,34 +81,44 @@ function App() {
   const [toast, setToast] = useState<{ message: string; type: 'error' | 'info' } | null>(null);
   const toastTimeoutRef = useRef<number | null>(null);
 
-  const showToast = useCallback((message: string, type: 'error' | 'info' = 'error') => {
-    if (toastTimeoutRef.current) {
-      clearTimeout(toastTimeoutRef.current);
-    }
-    setToast({ message, type });
-    toastTimeoutRef.current = window.setTimeout(() => {
-      setToast(null);
-    }, 5000);
-  }, []);
+  const showToast = useCallback(
+    (message: string, type: 'error' | 'info' = 'error', ms = 5000) => {
+      if (toastTimeoutRef.current) {
+        clearTimeout(toastTimeoutRef.current);
+      }
+      setToast({ message, type });
+      toastTimeoutRef.current = window.setTimeout(() => {
+        setToast(null);
+      }, ms);
+    },
+    []
+  );
+
+  // Anything Rust found wrong at startup - a shortcut that would not register,
+  // a missing permission. Asked for rather than pushed, because Rust finds
+  // these before this window exists to hear them.
+  useEffect(() => {
+    invoke<string[]>("get_startup_warnings")
+      .then((warnings) => {
+        if (warnings.length > 0) showToast(warnings.join(" "), "error", 15000);
+      })
+      .catch(() => {});
+  }, [showToast]);
 
   // Note: Hyperwhisper server settings are managed by useTrialKey hook
 
   const finalTextRef = useRef<string>("");
 
-  // Animated waveform state
-  const [barHeights, setBarHeights] = useState<number[]>([]);
+  // The recording bars. Written straight into the DOM rather than held in
+  // React state: the levels arrive 20 times a second, and re-rendering the
+  // whole window that often is wasted work, most of it while it is hidden.
+  const BAR_COUNT = 48;
+  const barsRef = useRef<(HTMLDivElement | null)[]>([]);
 
   // Keep ref in sync with state for use in callbacks
   useEffect(() => {
     finalTextRef.current = finalText;
   }, [finalText]);
-
-  // Clear the bars when a recording ends, so the last shape does not stay
-  // frozen on screen. While recording they are filled from the "mic-level"
-  // listener further down, with the real audio.
-  useEffect(() => {
-    if (!isRecording) setBarHeights([]);
-  }, [isRecording]);
 
   // Save API key to localStorage and send to backend
   useEffect(() => {
@@ -335,12 +345,21 @@ function App() {
     };
   }, []);
 
+  // Ask Rust whether it is recording. Rust owns that answer; the window only
+  // mirrors it. Guessing here is what left the two disagreeing for good.
+  const syncRecordingState = useCallback(() => {
+    invoke<boolean>("is_recording").then(setIsRecording).catch(() => {});
+  }, []);
+
   // Listen for transcription errors (e.g., auth failure, connection issues)
   useEffect(() => {
     const unlisten = listen<string>("transcription-error", (event) => {
       const errorMsg = event.payload;
       setConnectionError(errorMsg);
-      setIsRecording(false);
+      // This error can belong to the previous dictation and arrive after the
+      // next recording has already started. Turning the flag off here stopped
+      // the shortcut working until the app was restarted.
+      syncRecordingState();
       // Auto-clear error after 10 seconds
       setTimeout(() => setConnectionError(null), 10000);
     });
@@ -348,7 +367,7 @@ function App() {
     return () => {
       unlisten.then((fn) => fn());
     };
-  }, []);
+  }, [syncRecordingState]);
 
   // Store handleRecord in a ref so the D-Bus listener always has the latest version
   const handleRecordRef = useRef<() => void>(() => {});
@@ -389,12 +408,13 @@ function App() {
   useEffect(() => {
     const unlisten = listen<{ bands: number[] }>("mic-level", (event) => {
       const bands = event.payload.bands ?? [];
-      // 48 bars across, each 4% to 100% tall.
-      const bars = Array.from({ length: 48 }, (_, i) => {
-        const value = bands[Math.floor((i * bands.length) / 48)] ?? 0;
-        return Math.max(4, value * 100);
-      });
-      setBarHeights(bars);
+      // Each bar is 4% to 100% tall.
+      for (let i = 0; i < BAR_COUNT; i++) {
+        const bar = barsRef.current[i];
+        if (!bar) continue;
+        const value = bands[Math.floor((i * bands.length) / BAR_COUNT)] ?? 0;
+        bar.style.height = `${Math.max(4, value * 100)}%`;
+      }
     });
 
     return () => {
@@ -469,6 +489,7 @@ function App() {
       playStartTone();
     } catch (err) {
       showToast(`Could not start recording: ${err}`);
+      syncRecordingState();
     }
   };
 
@@ -485,7 +506,7 @@ function App() {
       }
     } catch (err) {
       showToast(`Could not stop recording: ${err}`);
-      setIsRecording(false);
+      syncRecordingState();
     }
   };
 
@@ -498,8 +519,11 @@ function App() {
     }
   };
 
-  // Keep ref updated for D-Bus listener
-  handleRecordRef.current = handleRecord;
+  // Updated after each render, not during one: assigning while rendering can
+  // leave the shortcut holding a stale copy that toggles the wrong way.
+  useEffect(() => {
+    handleRecordRef.current = handleRecord;
+  });
 
   const handleDrag = () => getCurrentWindow().startDragging();
 
@@ -652,17 +676,17 @@ function App() {
       <div className="flex-1 flex items-center justify-center px-8 relative">
         {connectionError ? (
           <div className="px-4 w-full max-h-[100px] overflow-y-auto">
-            <div className="flex items-center justify-center gap-2">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400 flex-shrink-0">
+            <div className="flex items-start justify-start gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-red-400 flex-shrink-0 mt-0.5">
                 <circle cx="12" cy="12" r="10"/>
                 <line x1="12" y1="8" x2="12" y2="12"/>
                 <line x1="12" y1="16" x2="12.01" y2="16"/>
               </svg>
-              <p className="text-sm text-red-400 text-center leading-relaxed">
-                {connectionError.includes("403") ? "API key expired or invalid" :
-                 connectionError.includes("401") ? "Authentication failed" :
-                 connectionError.includes("connect") ? "Connection failed" :
-                 "Connection error"}
+              {/* The message itself. It used to be replaced with one of four
+                  fixed phrases, so everything Rust explains about the
+                  microphone arrived as the words "Connection error". */}
+              <p className="text-sm text-red-400 text-left leading-relaxed">
+                {connectionError}
               </p>
             </div>
             <button
@@ -678,11 +702,14 @@ function App() {
           </div>
         ) : isRecording ? (
           <div className="flex items-center justify-center gap-[1px] h-[60px] w-full">
-            {barHeights.map((height, i) => (
+            {Array.from({ length: BAR_COUNT }, (_, i) => (
               <div
                 key={i}
+                ref={(el) => {
+                  barsRef.current[i] = el;
+                }}
                 className="w-[2px] bg-white/70 rounded-full transition-all duration-75"
-                style={{ height: `${height}%` }}
+                style={{ height: "4%" }}
               />
             ))}
           </div>

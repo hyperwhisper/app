@@ -51,6 +51,9 @@ pub struct AudioState {
     transcription_language: Arc<Mutex<Option<String>>>,
     // show the live microphone numbers and the per-dictation line
     debug_stats: Arc<Mutex<bool>>,
+    // Problems found at startup. Kept until a window asks: emitting them as
+    // they happen is too early, no window is listening yet.
+    startup_warnings: Arc<Mutex<Vec<String>>>,
 }
 
 // D-Bus service for external control (Linux only)
@@ -66,6 +69,17 @@ impl OmegawhisperDBus {
         // Emit event to frontend to toggle recording
         let _ = self.app_handle.emit("recording-toggled", ());
         true
+    }
+}
+
+// Emits "transcription-complete" however the transcription thread ends, panic
+// included. Without it a crash inside the model leaves both windows stuck on
+// "Transcribing..." until the app is restarted.
+struct CompleteOnDrop(AppHandle);
+
+impl Drop for CompleteOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.emit("transcription-complete", ());
     }
 }
 
@@ -864,6 +878,13 @@ fn get_debug_stats(state: State<'_, AudioState>) -> bool {
     *state.debug_stats.lock().unwrap()
 }
 
+// A missing shortcut or permission is invisible otherwise: the app sits in the
+// tray looking healthy and simply does nothing.
+#[tauri::command]
+fn get_startup_warnings(state: State<'_, AudioState>) -> Vec<String> {
+    state.startup_warnings.lock().unwrap().clone()
+}
+
 // Legacy check for backward compatibility with old settings page
 #[tauri::command]
 fn check_local_model_status(state: State<'_, AudioState>) -> Result<serde_json::Value, String> {
@@ -1220,11 +1241,23 @@ fn mix_to_mono(buffer: Vec<f32>, channels: u16) -> Vec<f32> {
     mono
 }
 
+// A microphone problem the user has to be told about. Clearing the flag matters
+// as much as the message: leaving it set made the next shortcut press fail with
+// "Already recording", with nothing on screen to explain it.
+fn report_microphone_failure(app: &AppHandle, is_recording: &Arc<Mutex<bool>>, message: String) {
+    eprintln!("{}", message);
+    if let Ok(mut flag) = is_recording.lock() {
+        *flag = false;
+    }
+    let _ = app.emit("transcription-error", message);
+}
+
 // Runs on the audio thread: store and hand off, never wait.
 fn build_capture_stream<T>(
     device: &Device,
     config: &cpal::StreamConfig,
     targets: CaptureTargets,
+    on_broken: impl Fn(String) + Send + 'static,
     to_f32: fn(T) -> f32,
 ) -> Result<cpal::Stream, cpal::BuildStreamError>
 where
@@ -1249,9 +1282,10 @@ where
             // Hand to the transcription thread
             let _ = targets.audio_tx.send(buffer);
         },
-        |err| {
-            eprintln!("Error in audio stream: {}", err);
-        },
+        // The microphone died mid-recording: unplugged, or taken by another app.
+        // The sound from here on was never captured and cannot be recovered, so
+        // say so and stop, which leaves what was already captured to transcribe.
+        move |err| on_broken(format!("{}", err)),
         None,
     )
 }
@@ -2045,6 +2079,7 @@ async fn start_recording(
 
             // Emit processing state
             let _ = app_handle_ws.emit("transcription-processing", ());
+            let _complete = CompleteOnDrop(app_handle_ws.clone());
 
             // Flush resampler
             if let Ok(final_samples) = resampler.flush() {
@@ -2105,7 +2140,6 @@ async fn start_recording(
                             audio_seconds
                         ),
                     );
-                    let _ = app_handle_ws.emit("transcription-complete", ());
                     return;
                 }
 
@@ -2133,7 +2167,6 @@ async fn start_recording(
                                 e
                             ),
                         );
-                        let _ = app_handle_ws.emit("transcription-complete", ());
                         return;
                     }
                 };
@@ -2241,8 +2274,7 @@ async fn start_recording(
                 }
             }
 
-            // Notify frontend that transcription processing is complete
-            let _ = app_handle_ws.emit("transcription-complete", ());
+            // "transcription-complete" is sent by _complete when this thread ends.
         });
     } else {
         // Spawn WebSocket thread for Deepgram or Hyperwhisper server
@@ -2450,7 +2482,31 @@ async fn start_recording(
     }
 
     // Spawn audio recording thread
+    let app_handle_audio = app_handle.clone();
+    let is_recording_audio = is_recording_arc.clone();
     thread::spawn(move || {
+        // The microphone would not open at all.
+        let fail = |message: String| {
+            report_microphone_failure(&app_handle_audio, &is_recording_audio, message);
+        };
+        // It opened, then died part-way through: unplugged, or taken by another
+        // app. The sound from that moment on was never captured and cannot be
+        // recovered, so stop and keep what was already recorded.
+        let broken = {
+            let app = app_handle_audio.clone();
+            let flag = is_recording_audio.clone();
+            move |err: String| {
+                report_microphone_failure(
+                    &app,
+                    &flag,
+                    format!(
+                        "The microphone stopped during the recording ({}). Whatever was \
+                         recorded before it stopped has been kept.",
+                        err
+                    ),
+                );
+            }
+        };
         let targets = CaptureTargets {
             is_recording: is_recording_arc.clone(),
             recorded_samples: recorded_samples_arc.clone(),
@@ -2460,11 +2516,20 @@ async fn start_recording(
             channels,
         };
         let stream_result = match sample_format {
-            SampleFormat::F32 => build_capture_stream(&device, &stream_config, targets, |s: f32| s),
-            SampleFormat::I16 => build_capture_stream(&device, &stream_config, targets, i16_to_f32),
-            SampleFormat::U16 => build_capture_stream(&device, &stream_config, targets, u16_to_f32),
+            SampleFormat::F32 => {
+                build_capture_stream(&device, &stream_config, targets, broken, |s: f32| s)
+            }
+            SampleFormat::I16 => {
+                build_capture_stream(&device, &stream_config, targets, broken, i16_to_f32)
+            }
+            SampleFormat::U16 => {
+                build_capture_stream(&device, &stream_config, targets, broken, u16_to_f32)
+            }
             _ => {
-                eprintln!("Unsupported microphone sample format: {:?}", sample_format);
+                fail(format!(
+                    "This microphone sends audio in a format the app cannot read ({:?}).",
+                    sample_format
+                ));
                 return;
             }
         };
@@ -2472,13 +2537,18 @@ async fn start_recording(
         let stream = match stream_result {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("Failed to build stream: {}", e);
+                fail(format!(
+                    "The microphone could not be opened: {}. Check that no other app \
+                     is holding it, and that Omegawhisper is allowed in System \
+                     Settings > Privacy & Security > Microphone.",
+                    e
+                ));
                 return;
             }
         };
 
         if let Err(e) = stream.play() {
-            eprintln!("Failed to play stream: {}", e);
+            fail(format!("The microphone opened but would not start: {}.", e));
             return;
         }
 
@@ -2533,16 +2603,13 @@ async fn stop_recording(
 
     fs::write(&file_path, &wav_bytes).map_err(|e| format!("Failed to save recording: {}", e))?;
 
-    // Encode as base64
-    use base64::Engine;
-    let base64_audio = base64::engine::general_purpose::STANDARD.encode(&wav_bytes);
-    let data_url = format!("data:audio/wav;base64,{}", base64_audio);
-
     // Clear recorded samples
     *state.recorded_samples.lock().unwrap() = Vec::new();
 
+    // The base64 copy of the recording that used to be returned here is gone.
+    // A minute of audio made a 31 MB string on the shared runtime, and nothing
+    // ever read it.
     let response = serde_json::json!({
-        "dataUrl": data_url,
         "filePath": file_path.to_string_lossy()
     });
 
@@ -2688,6 +2755,8 @@ pub fn run() {
     // Say at startup whether text can be typed into other apps. This is
     // granted per bundle identifier, so it is lost whenever the app is
     // renamed or reinstalled under a new identifier.
+    let mut startup_warnings: Vec<String> = Vec::new();
+
     #[cfg(target_os = "macos")]
     if accessibility_granted() {
         eprintln!("Accessibility permission: granted (auto-type can work).");
@@ -2695,6 +2764,11 @@ pub fn run() {
         eprintln!(
             "Accessibility permission: NOT granted. Auto-type will do nothing. \
              Add Omegawhisper in System Settings > Privacy & Security > Accessibility."
+        );
+        startup_warnings.push(
+            "Text cannot be typed into other apps: Omegawhisper is not allowed in \
+             System Settings > Privacy & Security > Accessibility."
+                .to_string(),
         );
     }
 
@@ -2772,6 +2846,7 @@ pub fn run() {
         use_vad: Arc::new(Mutex::new(true)),
         transcription_language: Arc::new(Mutex::new(saved_prefs.language.clone())),
         debug_stats: Arc::new(Mutex::new(saved_prefs.debug_stats)),
+        startup_warnings: Arc::new(Mutex::new(startup_warnings)),
     };
 
     tauri::Builder::default()
@@ -2825,17 +2900,28 @@ pub fn run() {
             get_keybinding,
             position_indicator,
             get_debug_stats,
+            get_startup_warnings,
         ])
         .setup(|app| {
             // F3 toggles recording from anywhere.
             #[cfg(desktop)]
             {
+                use tauri::Manager;
                 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Shortcut};
                 if let Err(e) = app
                     .global_shortcut()
                     .register(Shortcut::new(None, Code::F3))
                 {
                     eprintln!("Failed to register F3 shortcut: {}", e);
+                    app.state::<AudioState>()
+                        .startup_warnings
+                        .lock()
+                        .unwrap()
+                        .push(format!(
+                            "F3 could not be registered, so the shortcut will not work. \
+                             Another app is probably using it. ({})",
+                            e
+                        ));
                 }
             }
 
@@ -2862,6 +2948,13 @@ pub fn run() {
                 )?;
                 let hide_item =
                     MenuItem::with_id(app, "hide_window", "Hide window", true, None::<&str>)?;
+                let recordings_item = MenuItem::with_id(
+                    app,
+                    "open_recordings",
+                    "Open recordings folder",
+                    true,
+                    None::<&str>,
+                )?;
 
                 // Language submenu (affects local Whisper transcription only).
                 // Tick whatever was chosen last time, not always Auto-detect.
@@ -2920,6 +3013,7 @@ pub fn run() {
                         &open_item,
                         &settings_item,
                         &hide_item,
+                        &recordings_item,
                         &lang_menu,
                         &debug_item,
                         &sep,
@@ -2990,6 +3084,20 @@ pub fn run() {
                                     }
                                     Err(e) => eprintln!("Failed to create settings window: {}", e),
                                 }
+                            }
+                        }
+                        "open_recordings" => {
+                            // Every dictation leaves two WAV files here and
+                            // nothing removes them, so make the folder reachable.
+                            match get_recordings_dir() {
+                                Ok(dir) => {
+                                    if let Err(e) =
+                                        tauri_plugin_opener::open_path(&dir, None::<&str>)
+                                    {
+                                        eprintln!("Could not open {}: {}", dir.display(), e);
+                                    }
+                                }
+                                Err(e) => eprintln!("No recordings folder: {}", e),
                             }
                         }
                         "hide_window" => {
