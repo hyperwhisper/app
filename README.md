@@ -47,19 +47,50 @@ Transcription runs three ways:
 
 There are no prebuilt macOS releases. You build it yourself. Tested on Apple Silicon.
 
-Six steps. Step 5 grants macOS permissions — the app cannot type anything until you do it,
-so do not stop after the build.
+### The short way
+
+```sh
+git clone https://github.com/webtemp/omegawhisper.git
+cd omegawhisper
+./scripts/install.sh
+```
+
+That does steps 1 to 4 below for you. It installs only what is missing, never replaces a
+Rust or a Homebrew you already have, and stops twice to tell you what to click. You still
+have to grant Accessibility yourself (step 5) — macOS does not let any script do that.
+
+Or do it by hand, below. Six steps. Step 5 grants macOS permissions — the app cannot type
+anything until you do it, so do not stop after the build.
 
 ### 1. Install the build tools
+
+You need [Homebrew](https://brew.sh) first, since two of these come from it:
+
+```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+```
+
+Then:
 
 ```sh
 xcode-select --install                                          # C/C++ compiler and linker
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh  # Rust (not Homebrew's rust)
-brew tap oven-sh/bun && brew install bun                        # Bun
+brew install bun                                                # Bun
 brew install cmake                                              # builds whisper.cpp
 ```
 
 CMake is not optional. Without it the build fails while compiling `whisper-rs-sys`.
+
+> [!IMPORTANT]
+> **After installing Rust, open a new terminal.** Rustup does not add `cargo` to the
+> terminal you are sitting in — it writes a line into your shell startup files, and only
+> terminals opened afterwards read those. Carry on in the same window and the build fails
+> with `failed to run 'cargo metadata'` and `No such file or directory (os error 2)`, which
+> never mentions Rust. To fix the window you already have without opening a new one:
+>
+> ```sh
+> source "$HOME/.cargo/env"
+> ```
 
 ### 2. Get the code and the Tauri CLI
 
@@ -180,6 +211,17 @@ key in Settings → Dictation key.
 
 **Text is transcribed but never typed.** Accessibility. If you rebuilt the app, the grant
 is gone even though the checkbox still looks on: reset it (step 5).
+
+**The build says `failed to run 'cargo metadata'` / `No such file or directory (os error 2)`.**
+That means the build cannot find `cargo`. Two different causes:
+
+```sh
+which cargo || ls ~/.cargo/bin/cargo
+```
+
+Nothing found at all — Rust is not installed, do step 1. Found in `~/.cargo/bin` but `which`
+says nothing — it is installed and your terminal is just too old to see it, so open a new
+one or run `source "$HOME/.cargo/env"`.
 
 **The app freezes for a second after I stop.** Expected with local models. They transcribe
 after the recording ends, not during.
