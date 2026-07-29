@@ -12,6 +12,17 @@ enum LoadedEngine {
     Moonshine(MoonshineModel),
 }
 
+// Whisper writes in whichever style it starts in, so long recordings often come
+// back with no capitals and no punctuation. It copies the style of this text
+// instead. Whisper reads it as background and never types it out.
+//
+// Deliberately about nothing: any subject in here becomes words Whisper expects
+// to hear, and it would start finding them in unrelated speech.
+const STYLE_PROMPT: &str = "Hello. This is an ordinary sentence, written the \
+     normal way, with commas where they belong and a full stop at the end. On \
+     Monday I told Maria that the work would be done by January. Do you see \
+     how it reads? Yes, exactly like that.";
+
 impl LoadedEngine {
     /// Transcribe audio samples (expects 16kHz mono f32 audio).
     /// Samples go straight to the engine - no temp WAV file needed.
@@ -27,6 +38,7 @@ impl LoadedEngine {
                 let params = WhisperInferenceParams {
                     language,
                     no_speech_thold: 0.6,
+                    initial_prompt: Some(STYLE_PROMPT.to_string()),
                     ..Default::default()
                 };
                 engine
@@ -41,11 +53,9 @@ impl LoadedEngine {
                     .transcribe_with(samples, &ParakeetParams::default())
                     .map_err(|e| format!("Parakeet transcription error: {}", e))
             }
-            LoadedEngine::Moonshine(model) => {
-                model
-                    .transcribe_with(samples, &MoonshineParams::default())
-                    .map_err(|e| format!("Moonshine transcription error: {}", e))
-            }
+            LoadedEngine::Moonshine(model) => model
+                .transcribe_with(samples, &MoonshineParams::default())
+                .map_err(|e| format!("Moonshine transcription error: {}", e)),
         };
 
         result.map(|r| r.text)
@@ -156,15 +166,15 @@ impl TranscriptionManager {
     }
 
     /// Transcribe 16kHz mono f32 audio. `language` None = auto-detect.
-    pub fn transcribe(&mut self, samples: &[f32], language: Option<String>) -> Result<String, String> {
-        let engine = self
-            .loaded_engine
-            .as_mut()
-            .ok_or("No model loaded")?;
+    pub fn transcribe(
+        &mut self,
+        samples: &[f32],
+        language: Option<String>,
+    ) -> Result<String, String> {
+        let engine = self.loaded_engine.as_mut().ok_or("No model loaded")?;
 
         engine.transcribe(samples, language)
     }
-
 }
 
 /// Thread-safe wrapper for TranscriptionManager
@@ -172,7 +182,9 @@ pub struct SharedTranscriptionManager(pub Arc<Mutex<TranscriptionManager>>);
 
 impl SharedTranscriptionManager {
     pub fn new(model_manager: Arc<ModelManager>) -> Self {
-        Self(Arc::new(Mutex::new(TranscriptionManager::new(model_manager))))
+        Self(Arc::new(Mutex::new(TranscriptionManager::new(
+            model_manager,
+        ))))
     }
 
     pub fn is_model_loaded(&self) -> bool {
