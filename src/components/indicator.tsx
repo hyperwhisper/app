@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { db } from "@/lib/audio-level";
+import { handOverBrowserSettings } from "@/lib/browser-settings";
 
 const BINS = 64;
 const ROWS = 30;
@@ -102,10 +103,37 @@ export function Indicator() {
   // The drawing loop is set up once and cannot read React state.
   const errorRef = useRef(false);
 
+  // Anything Rust found wrong at startup: a dictation key it could not
+  // register, a permission it was not given. This is the only window the user
+  // ever sees, so a warning shown anywhere else is a warning nobody reads.
+  const [startupWarning, setStartupWarning] = useState<string | null>(null);
+
   // The line of live numbers is off unless switched on in the tray menu.
   const [showStats, setShowStats] = useState(false);
   // The drawing loop cannot read React state, so it reads this.
   const showStatsRef = useRef(false);
+
+  // The settings the deleted main window kept in browser storage. This window
+  // loads on every launch, shown or not, so it is the one that can hand them
+  // over without the user having to open anything. Rust copies them once.
+  useEffect(() => {
+    handOverBrowserSettings().catch((err) =>
+      console.error("Could not hand the old settings to Rust:", err)
+    );
+  }, []);
+
+  // Asked for rather than pushed: Rust finds these before this window exists
+  // to hear about them. Rust puts the window on screen once it is told there
+  // is something to show.
+  useEffect(() => {
+    invoke<string[]>("get_startup_warnings")
+      .then((warnings) => {
+        if (warnings.length === 0) return;
+        setStartupWarning(warnings.join(" "));
+        invoke("show_startup_warning").catch(() => {});
+      })
+      .catch(() => {});
+  }, []);
 
   // The ring only draws while the model is working.
   useEffect(() => {
@@ -323,6 +351,7 @@ export function Indicator() {
         setTranscribing(false);
         errorRef.current = false;
         setErrorText(null);
+        setStartupWarning(null);
         if (textRef.current) textRef.current.textContent = "";
         for (const row of history) row.fill(0);
       }
@@ -448,7 +477,7 @@ export function Indicator() {
           paddingRight: 8,
         }}
       />
-      {errorText && (
+      {(errorText ?? startupWarning) && (
         <div
           className="absolute inset-0 flex items-center justify-center px-4"
           style={{ pointerEvents: "none" }}
@@ -468,11 +497,11 @@ export function Indicator() {
               textAlign: "left",
             }}
           >
-            {errorText}
+            {errorText ?? startupWarning}
           </div>
         </div>
       )}
-      {transcribing && !errorText && (
+      {transcribing && !errorText && !startupWarning && (
         <div
           className="absolute inset-0 flex flex-col items-center justify-center gap-3"
           style={{ pointerEvents: "none" }}

@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- Held down: recording. The key has travelled onto the edge that was
+       showing underneath it, and fills in, because a solid shape is the only
+       change that still reads at 18 px across a bright menu bar. -->
+  <mask id="sound-cut-out">
+    <rect x="7" y="17" width="46" height="40" rx="10" fill="#ffffff"/>
+    <g fill="none" stroke="#000000" stroke-width="4" stroke-linecap="round">
+      <path d="M19 32v10"/><path d="M27 27v20"/><path d="M35 31v12"/><path d="M43 34v6"/>
+    </g>
+  </mask>
+  <rect x="7" y="17" width="46" height="40" rx="10" fill="#000000" mask="url(#sound-cut-out)"/>
+</svg>

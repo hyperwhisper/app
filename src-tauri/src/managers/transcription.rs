@@ -80,10 +80,6 @@ impl TranscriptionManager {
     }
 
     /// Check if a model is currently loaded
-    pub fn is_model_loaded(&self) -> bool {
-        self.loaded_engine.is_some()
-    }
-
     /// Get the currently loaded model ID
     pub fn get_loaded_model_id(&self) -> Option<&str> {
         self.current_model_id.as_deref()
@@ -187,22 +183,11 @@ impl SharedTranscriptionManager {
         ))))
     }
 
-    pub fn is_model_loaded(&self) -> bool {
-        self.0.lock().map(|m| m.is_model_loaded()).unwrap_or(false)
-    }
-
     pub fn get_loaded_model_id(&self) -> Option<String> {
         self.0
             .lock()
             .ok()
             .and_then(|m| m.get_loaded_model_id().map(|s| s.to_string()))
-    }
-
-    pub fn load_model(&self, model_id: &str) -> Result<(), String> {
-        self.0
-            .lock()
-            .map_err(|_| "Failed to lock transcription manager")?
-            .load_model(model_id)
     }
 
     pub fn unload_model(&self) {

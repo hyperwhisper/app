@@ -1,16 +1,11 @@
 [package]
 name = "omegawhisper"
-version = "0.2.0"
-description = "The most productive speech to text app for linux"
-authors = ["shenoy.ameya@gmail.com", "Deyan Danailov <webtemp@gmail.com>"]
+version = "0.2.1"
+description = "The most productive local-only speech to text program."
+authors = ["Deyan Danailov <webtemp@gmail.com>", "shenoy.ameya@gmail.com"]
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
-# The `_lib` suffix may seem redundant but it is necessary
-# to make the lib name unique and wouldn't conflict with the bin name.
-# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
 name = "omegawhisper_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
@@ -26,13 +21,9 @@ serde_json = "1"
 cpal = "0.15"
 chrono = "0.4"
 dirs = "5"
-tungstenite = { version = "0.21", features = ["native-tls"] }
-native-tls = "0.2"
-url = "2"
 zbus = "4"
+# Downloads the model files.
 ureq = { version = "2", features = ["json"] }
-sha2 = "0.10"
-hex = "0.4"
 rubato = "0.15"
 clap = { version = "4", features = ["derive"] }
 # Multi-model local transcription

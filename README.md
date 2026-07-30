@@ -250,21 +250,20 @@ bun run test:web  # frontend only
 bun run dev       # frontend only, port 1420
 ```
 
-Regenerating the icons: `bun run tauri icon logo.png`
-
 ```
-src/                       React 19 frontend
-  App.tsx                  main window: recording, text, waveform, playback
-  components/indicator.tsx spectrogram window
-  components/settings-page.tsx
+src/                       React 19 frontend (two windows, no main window)
+  components/indicator.tsx spectrogram, errors, startup warnings
+  components/settings-page.tsx  dictation key, microphone, models
 src-tauri/src/
-  lib.rs                   commands, recording threads, typing, tray, windows
+  lib.rs                   app state, events, run(), the command list
+  recording.rs             start/stop, capture stream, transcription thread
+  analysis.rs              loudness, frequency bands, pitch, trimming, WAV
+  settings.rs              the settings file; microphone.rs  input devices
+  indicator.rs  chime.rs  tray.rs  shortcut.rs  typing.rs  storage.rs
   managers/model.rs        model list, download, delete
   managers/transcription.rs  loads a model, runs transcribe-rs
-  audio/vad.rs             voice detection
+src-tauri/icons/           app icon and menu-bar frames, all committed
 ```
-
-See [AGENTS.md](./AGENTS.md) for how the pieces fit together.
 
 **Tech stack:** React 19, TypeScript, Tailwind CSS 4, shadcn/ui, Rust, Tauri v2, cpal.
 

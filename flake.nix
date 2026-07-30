@@ -188,9 +188,8 @@
             echo "Frontend dist contents:"
             ls -la dist/
 
-            # Generate icons from logo.png
-            echo "Generating icons from logo.png..."
-            cargo tauri icon logo.png
+            # No icon step. Every icon is a committed file in src-tauri/icons/,
+            # so there is nothing here that can fail before the app has a face.
 
             # Setup cargo vendor directory
             mkdir -p .cargo

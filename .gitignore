@@ -13,8 +13,7 @@ dist-ssr
 *.local
 
 # Editor directories and files
-.vscode/*
-!.vscode/extensions.json
+.vscode/
 .idea
 .DS_Store
 *.suo
@@ -26,9 +25,8 @@ dist-ssr
 # nix
 result
 
-# ignore images since they can be geenrated in a deterministic fashion
-
-# Mobile icons. This fork builds for macOS only; regenerate with
-# `bun run tauri icon logo.png` if a phone build is ever added.
+# Phone icons. This fork builds for macOS only, so they are not kept and no
+# build reads them. Everything the app does use is committed under
+# src-tauri/icons/.
 src-tauri/icons/android/
 src-tauri/icons/ios/

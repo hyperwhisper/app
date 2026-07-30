@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!--
+    Menu-bar icon, resting. Loaded with icon_as_template(true), so macOS throws
+    the colour away and keeps only the alpha: black on clear is all that means
+    anything here. The key sits up, with the edge of the key below it showing.
+  -->
+  <mask id="behind-the-key">
+    <rect width="64" height="64" fill="#ffffff"/>
+    <rect x="7" y="7" width="46" height="40" rx="10" fill="#000000"/>
+  </mask>
+  <rect x="7" y="17" width="46" height="40" rx="10" fill="none" stroke="#000000"
+        stroke-width="4.5" opacity="0.3" mask="url(#behind-the-key)"/>
+  <g fill="none" stroke="#000000" stroke-width="4.5" stroke-linejoin="round">
+    <rect x="7" y="7" width="46" height="40" rx="10"/>
+  </g>
+  <g fill="none" stroke="#000000" stroke-width="4" stroke-linecap="round">
+    <path d="M19 22v10"/><path d="M27 17v20"/><path d="M35 21v12"/><path d="M43 24v6"/>
+  </g>
+</svg>
